@@ -1,0 +1,26 @@
+{
+  "name": "@tty-pt/qmod",
+  "version": "0.0.1",
+  "description": "A library for easy extensibility in C",
+  "main": "lib/libqmod.so",
+  "scripts": {
+    "test": "echo no tests"
+  },
+  "keywords": ["extensibility", "plugin", "library", "module"],
+  "author": "quirinpa@gmail.com",
+  "license": "BSD-2-Clause",
+  "files": [
+    "src/*.c",
+    "qmod.pc",
+    "include",
+    "Makefile"
+  ],
+  "peerDependencies": {
+    "@tty-pt/mk": "^0.1.14",
+    "@tty-pt/qsys": "^0.0.10"
+  },
+  "devDependencies": {
+    "@tty-pt/mk": "^0.1.14",
+    "@tty-pt/qsys": "^0.0.10"
+  }
+}
