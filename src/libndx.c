@@ -1,4 +1,4 @@
-#include "../include/qmod.h"
+#include "../include/ndx.h"
 
 #include <dlfcn.h>
 #include <string.h>
@@ -25,9 +25,9 @@ unsigned mod_hd, modn_hd,
 fnp_t mod[MOD_MASK + 1];
 fnp_t sica[MOD_MASK + 1];
 
-qmod_t qmod;
+ndx_t ndx;
 
-void mod_close(void) {
+void ndx_exist(void) {
 	unsigned c = qmap_iter(mod_hd, NULL), id;
 
 	while (qmap_next(&id, c))
@@ -50,7 +50,7 @@ int _mod_run(void *sl, char *symbol) {
 
 void _mod_load(char *fname) {
 	void (*auto_init)(void) = NULL;
-	qmod_t *iqmod;
+	ndx_t *indx;
 	char *symbol;
 	unsigned id;
 	void *sl;
@@ -65,11 +65,11 @@ void _mod_load(char *fname) {
 	}
 
 	id = qmap_get(modn_hd, fname);
-	iqmod = dlsym(sl, "nd");
-	if (iqmod)
-		*iqmod = qmod;
+	indx = dlsym(sl, "nd");
+	if (indx)
+		*indx = ndx;
 
-	symbol = id == QM_MISS ? "qmod_install" : "qmod_open";
+	symbol = id == QM_MISS ? "ndx_install" : "ndx_open";
 
 	WARN("%s: '%s'\n", symbol, fname);
 
@@ -92,24 +92,26 @@ void mod_load(char *fname) {
 
 	if (id == QM_MISS)
 		_mod_load(fname);
-
-	WARN("module '%s' already present\n", fname);
+	else
+		WARN("module '%s' already present\n", fname);
 }
 
-int qmod_last(void *ret) {
-	if (!qmod.adapter->ran)
+int ndx_last(void *ret) {
+	if (!ndx.adapter->ran)
 		return 1;
 
-	memcpy(ret, qmod.adapter->ret,
-			qmod.adapter->ret_size);
+	memcpy(ret, ndx.adapter->ret,
+			ndx.adapter->ret_size);
 	return 0;
 }
 
-void qmod_call(void *retp, unsigned id, void *arg) {
+void
+ndx_call(void *retp, unsigned id, void *arg)
+{
 	unsigned mod_id, sica_id;
 	unsigned c;
 
-	qmod_adapter_t adapter;
+	ndx_adapter_t adapter;
 	adapter.ran = 0;
 
 	sica_id = qmap_get(sica_hd, &id);
@@ -127,9 +129,9 @@ void qmod_call(void *retp, unsigned id, void *arg) {
 		if (!cb)
 			continue;
 
-		qmod_t *iqmod = (void *) dlsym(
+		ndx_t *indx = (void *) dlsym(
 				mod[mod_id].value, "nd");
-		iqmod->adapter = &adapter;
+		indx->adapter = &adapter;
 		adapter.call(retp, cb, arg);
 		adapter.ran++;
 
@@ -137,33 +139,31 @@ void qmod_call(void *retp, unsigned id, void *arg) {
 	}
 }
 
-void
-shared_assoc(unsigned hd, unsigned link, qmap_assoc_t assoc)
-{
-	qmap_assoc(hd, link, assoc);
-}
-
 unsigned
-qmod_areg(char *name, qmod_adapter_t *adapter)
+ndx_areg(char *name, ndx_adapter_t *adapter)
 {
 	unsigned id = qmap_put(sica_hd, NULL, adapter);
 	qmap_put(sican_hd, name, &id);
 	return id;
 }
 
-unsigned qmod_get(char *name) {
+unsigned
+ndx_get(char *name)
+{
 	unsigned id = qmap_get(sican_hd, name);
 	return id;
 }
 
-void shared_init(void) {
-	qmod.areg = qmod_areg;
-	qmod.get = qmod_get;
-	qmod.call = qmod_call;
+static void
+shared_init(void)
+{
+	ndx.areg = ndx_areg;
+	ndx.get = ndx_get;
+	ndx.call = ndx_call;
 }
 
 void
-qmod_init()
+ndx_init(void)
 {
 	sica_hd = qmap_open(QM_HNDL, 0, 0, QM_AINDEX);
 	sican_hd = qmap_open(QM_HASH, 0, 0, 0);
@@ -175,5 +175,8 @@ qmod_init()
 
 	shared_init();
 
-	mod_load("core.so");
+	mod_load("./core.so");
+}
+
+void ndx_exit(void) {
 }

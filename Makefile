@@ -1,5 +1,5 @@
 LIB-LDLIBS := -lqsys -lqmap
-LIB := qmod
+LIB := ndx
 
 npm-lib := @tty-pt/qsys @tty-pt/qmap
 

@@ -1,15 +1,15 @@
-#ifndef QMOD_PAPI_H
-#define QMOD_PAPI_H
+#ifndef NDX_PAPI_H
+#define NDX_PAPI_H
 
-#include "../include/qmod.h"
+#include "../include/ndx.h"
 
 typedef struct {
-	qmod_call_t *call;
-	qmod_areg_t *areg;
-	qmod_get_t *get;
-	qmod_adapter_t *adapter;
-} qmod_t;
+	ndx_call_t *call;
+	ndx_areg_t *areg;
+	ndx_get_t *get;
+	ndx_adapter_t *adapter;
+} ndx_t;
 
-extern qmod_t qmod;
+extern ndx_t ndx;
 
 #endif
