@@ -8,30 +8,24 @@
 
 #include "papi.h"
 
-#define MOD_MASK 0xFFF
+#define MOD_MASK 0x7FFF
+#define SICA_MASK 0x7FFF
 
 enum opts {
 	OPT_DETACH = 1,
 };
 
-typedef struct {
-	char *name;
-	void *value;
-} fnp_t;
-
 unsigned mod_hd, modn_hd,
 	 sica_hd, sican_hd;
-
-fnp_t mod[MOD_MASK + 1];
-fnp_t sica[MOD_MASK + 1];
 
 ndx_t ndx;
 
 void ndx_exist(void) {
-	unsigned c = qmap_iter(mod_hd, NULL), id;
+	unsigned c = qmap_iter(mod_hd, NULL);
+	const void *key, *value;
 
-	while (qmap_next(&id, c))
-		dlclose(mod[id].value);
+	while (qmap_next(&key, &value, c))
+		dlclose((void *) value);
 }
 
 int _mod_run(void *sl, char *symbol) {
@@ -52,7 +46,6 @@ void _mod_load(char *fname) {
 	void (*auto_init)(void) = NULL;
 	ndx_t *indx;
 	char *symbol;
-	unsigned id;
 	void *sl;
 
 	sl = dlopen(fname, RTLD_NOW | RTLD_LOCAL
@@ -64,18 +57,16 @@ void _mod_load(char *fname) {
 	    return;
 	}
 
-	id = qmap_get(modn_hd, fname);
 	indx = dlsym(sl, "nd");
 	if (indx)
 		*indx = ndx;
 
-	symbol = id == QM_MISS ? "ndx_install" : "ndx_open";
+	const void *m = qmap_get(modn_hd, fname);
+	symbol = m ? "ndx_open" : "ndx_install";
 
 	WARN("%s: '%s'\n", symbol, fname);
 
-	id = qmap_put(mod_hd, NULL, NULL);
-	mod[id].value = sl;
-	mod[id].name = fname;
+	qmap_put(mod_hd, fname, sl);
 
 	* (void **) &auto_init = dlsym(sl, "mod_auto_init");
 
@@ -86,11 +77,11 @@ void _mod_load(char *fname) {
 }
 
 void mod_load(char *fname) {
-	unsigned id;
+	const void *key;
 
-	id = qmap_get(modn_hd, fname);
+	key = qmap_get(modn_hd, fname);
 
-	if (id == QM_MISS)
+	if (!key)
 		_mod_load(fname);
 	else
 		WARN("module '%s' already present\n", fname);
@@ -108,29 +99,28 @@ int ndx_last(void *ret) {
 void
 ndx_call(void *retp, unsigned id, void *arg)
 {
-	unsigned mod_id, sica_id;
 	unsigned c;
 
 	ndx_adapter_t adapter;
 	adapter.ran = 0;
 
-	sica_id = qmap_get(sica_hd, &id);
+	const void *key = qmap_get(sica_hd, &id), *value;
 
-	if (sica_id == QM_MISS) {
+	if (!key) {
 		WARN("No adapter registered for "
 				"symbol id '%u'\n", id);
 		return;
 	}
 
 	c = qmap_iter(mod_hd, NULL);
-	while (qmap_next(&mod_id, c)) {
-		void *cb = dlsym(mod[mod_id].value,
+	while (qmap_next(&key, &value, c)) {
+		void *cb = dlsym((char *) value,
 				adapter.name);
 		if (!cb)
 			continue;
 
 		ndx_t *indx = (void *) dlsym(
-				mod[mod_id].value, "nd");
+				(char *) value, "nd");
 		indx->adapter = &adapter;
 		adapter.call(retp, cb, arg);
 		adapter.ran++;
@@ -150,8 +140,8 @@ ndx_areg(char *name, ndx_adapter_t *adapter)
 unsigned
 ndx_get(char *name)
 {
-	unsigned id = qmap_get(sican_hd, name);
-	return id;
+	const unsigned *id = qmap_get(sican_hd, name);
+	return *id;
 }
 
 static void
@@ -165,12 +155,12 @@ shared_init(void)
 void
 ndx_init(void)
 {
-	sica_hd = qmap_open(QM_HNDL, 0, 0, QM_AINDEX);
-	sican_hd = qmap_open(QM_HASH, 0, 0, 0);
+	sica_hd = qmap_open(QM_HNDL, QM_PTR, SICA_MASK, QM_AINDEX);
+	sican_hd = qmap_open(QM_STR, QM_HNDL, SICA_MASK, 0);
 	qmap_assoc(sican_hd, sica_hd, NULL);
 
-	mod_hd = qmap_open(QM_HNDL, 0, 0, QM_AINDEX);
-	modn_hd = qmap_open(QM_HASH, 0, 0, 0);
+	mod_hd = qmap_open(QM_HNDL, QM_PTR, MOD_MASK, QM_AINDEX);
+	modn_hd = qmap_open(QM_STR, QM_HNDL, MOD_MASK, 0);
 	qmap_assoc(modn_hd, mod_hd, NULL);
 
 	shared_init();
