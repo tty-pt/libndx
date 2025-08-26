@@ -165,15 +165,17 @@ typedef void (*mod_cb_t)(void);
 
 #define NDX_DEF(ftype, fname, ...) \
     fname##_t fname; \
-    void fname##_adapter_call(void *res, void *fname, void *arg) { \
+    void fname##_adapter_call(void *res, void *fn, void *arg) { \
+	fname##_t *cast_fn; \
         struct fname##_args args; \
 	memcpy(&args, arg, sizeof(args)); \
-	if (!fname) { \
+	if (!fn) { \
 		WARN("%s_adapter_call: '%s' wasn't defined\n", \
 				XSTR(fname), XSTR(fname)); \
 		return; \
 	} \
-        ftype result = ((fname##_t *) fname)(NDX_NA(__VA_ARGS__)); \
+	* (void **) &cast_fn = fn; \
+        ftype result = cast_fn(NDX_NA(__VA_ARGS__)); \
 	if (res) memcpy(res, &result, sizeof(ftype)); \
     } \
     ndx_adapter_t fname##_adapter  __attribute__((visibility("default"))) = { \
