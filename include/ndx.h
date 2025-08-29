@@ -212,7 +212,7 @@ ndx_last_t ndx_last;
 typedef unsigned ndx_get_t(char *name);
 ndx_get_t ndx_get;
 
-void ndx_init(void);
-void ndx_exit(void);
+typedef void ndx_load_t(char *fname);
+ndx_load_t ndx_load;
 
 #endif

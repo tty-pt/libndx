@@ -76,7 +76,7 @@ void _mod_load(char *fname) {
 	_mod_run(sl, symbol);
 }
 
-void mod_load(char *fname) {
+void ndx_load(char *fname) {
 	const void *key;
 
 	key = qmap_get(modn_hd, fname);
@@ -152,7 +152,7 @@ shared_init(void)
 	ndx.call = ndx_call;
 }
 
-void
+__attribute__((constructor)) static void
 ndx_init(void)
 {
 	sica_hd = qmap_open(QM_HNDL, QM_PTR, SICA_MASK, QM_AINDEX);
@@ -164,9 +164,4 @@ ndx_init(void)
 	qmap_assoc(modn_hd, mod_hd, NULL);
 
 	shared_init();
-
-	mod_load("./core.so");
-}
-
-void ndx_exit(void) {
 }
