@@ -141,6 +141,12 @@ typedef void (*mod_cb_t)(void);
 #define __ID_MARKER__
 #endif
 
+#if defined(__APPLE__)
+#define _DATA_SECTION(name) __attribute__((used, section("__DATA," #name)))
+#else
+#define _DATA_SECTION(name) __attribute__((used, section("." #name)))
+#endif
+
 /* the callee uses this to be called */
 #define NDX_DECL(ftype, fname, ...) \
     typedef ftype fname##_t(NDX_FA(__VA_ARGS__)); \
@@ -160,7 +166,7 @@ typedef void (*mod_cb_t)(void);
     static void fname##_init_id(void) { \
 	    fname##_id = ndx_get(XSTR(fname)); \
     } \
-    __attribute__((used, section(".ndx_auto_init"))) \
+    _DATA_SECTION("ndx_auto_init") \
     static mod_cb_t fname##_init_id_p = &fname##_init_id // note lack of semicolon
 
 #define NDX_DEF(ftype, fname, ...) \
@@ -187,7 +193,7 @@ typedef void (*mod_cb_t)(void);
     void fname##_adapter_reg(void) { \
 	    fname##_id = ndx_areg(XSTR(fname), &fname##_adapter); \
     } \
-    __attribute__((used, section(".ndx_auto_init"))) \
+    _DATA_SECTION("ndx_auto_init") \
     void (*fname##_adapter_reg_p)(void) = fname##_adapter_reg // note lack of semicolon
 
 /* the caller uses this to call */

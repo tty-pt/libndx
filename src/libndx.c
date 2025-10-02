@@ -21,7 +21,7 @@ unsigned mod_hd, modn_hd,
 ndx_t ndx;
 
 void ndx_exist(void) {
-	unsigned c = qmap_iter(mod_hd, NULL);
+	unsigned c = qmap_iter(mod_hd, NULL, 0);
 	const void *key, *value;
 
 	while (qmap_next(&key, &value, c))
@@ -57,7 +57,7 @@ void _mod_load(char *fname) {
 	    return;
 	}
 
-	indx = dlsym(sl, "nd");
+	indx = dlsym(sl, "ndx");
 	if (indx)
 		*indx = ndx;
 
@@ -112,7 +112,7 @@ ndx_call(void *retp, unsigned id, void *arg)
 		return;
 	}
 
-	c = qmap_iter(mod_hd, NULL);
+	c = qmap_iter(mod_hd, NULL, 0);
 	while (qmap_next(&key, &value, c)) {
 		void *cb = dlsym((char *) value,
 				adapter.name);
