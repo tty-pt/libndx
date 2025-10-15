@@ -11,6 +11,7 @@ jobs:
     with:
       name: libndx
       deps: "libqmap"
+      deps_pacman_mingw: "mingw-w64-libqmap"
     secrets:
       HOST: ${{ secrets.OPENBSD_HOST }}
       USER: ${{ secrets.OPENBSD_USER }}

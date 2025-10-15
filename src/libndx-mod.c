@@ -25,3 +25,8 @@ ndx_load(char *name)
 {
 	ndx.load(name);
 }
+
+
+MODULE_API ndx_t* get_ndx_ptr() {
+    return &ndx;
+}
