@@ -1,10 +1,34 @@
-#include "../include/ndx.h"
+#include "../include/ttypt/ndx.h"
 
-#include <dlfcn.h>
+#ifdef _WIN32
+  #include <windows.h>
+  #define dlopen(filename, flags) (void*)LoadLibraryA(filename)
+  #define dlsym(handle, symbol) GetProcAddress((HMODULE)handle, symbol)
+  #define dlclose(handle) FreeLibrary((HMODULE)handle)
+  #define dlerror() _win_dlerror()
+
+  // Helper function to mimic dlerror()
+  static char err_buf[256];
+  const char* _win_dlerror() {
+      DWORD err_code = GetLastError();
+      if (err_code == 0) {
+          return NULL;
+      }
+      memset(err_buf, 0, sizeof(err_buf));
+      FormatMessageA(
+          FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+          NULL, err_code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+          err_buf, sizeof(err_buf), NULL);
+      return err_buf;
+  }
+#else
+  #include <dlfcn.h>
+#endif
+
 #include <string.h>
 
-#include <qsys.h>
-#include <qmap.h>
+#include <ttypt/qsys.h>
+#include <ttypt/qmap.h>
 
 #include "papi.h"
 
@@ -17,6 +41,8 @@ enum opts {
 
 unsigned mod_hd, modn_hd,
 	 sica_hd, sican_hd;
+
+typedef ndx_t* (*get_ndx_func_t)(void);
 
 ndx_t ndx;
 
@@ -44,7 +70,6 @@ int _mod_run(void *sl, char *symbol) {
 
 void _mod_load(char *fname) {
 	void (*auto_init)(void) = NULL;
-	ndx_t *indx;
 	char *symbol;
 	void *sl;
 
@@ -56,10 +81,6 @@ void _mod_load(char *fname) {
 			    fname, dlerror());
 	    return;
 	}
-
-	indx = dlsym(sl, "ndx");
-	if (indx)
-		*indx = ndx;
 
 	const void *m = qmap_get(modn_hd, fname);
 	symbol = m ? "ndx_open" : "ndx_install";
@@ -119,8 +140,11 @@ ndx_call(void *retp, unsigned id, void *arg)
 		if (!cb)
 			continue;
 
-		ndx_t *indx = (void *) dlsym(
-				(char *) value, "nd");
+		ndx_t *indx;
+		get_ndx_func_t get_ndx = (get_ndx_func_t) dlsym((char *) value, "get_ndx_ptr");
+		if (!get_ndx)
+			continue;
+		indx = get_ndx();
 		indx->adapter = &adapter;
 		adapter.call(retp, cb, arg);
 		adapter.ran++;

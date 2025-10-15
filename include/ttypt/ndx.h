@@ -13,7 +13,7 @@
 
 #include <stddef.h>
 #include <string.h>
-#include <qsys.h>
+#include <ttypt/qsys.h>
 
 typedef struct {
 	char name[64];
@@ -139,6 +139,12 @@ typedef void (*mod_cb_t)(void);
 
 #ifndef __ID_MARKER__
 #define __ID_MARKER__
+#endif
+
+#if defined(_WIN32)
+  #define MODULE_API __declspec(dllexport)
+#else
+  #define MODULE_API __attribute__((visibility("default")))
 #endif
 
 #if defined(__APPLE__)

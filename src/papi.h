@@ -1,7 +1,7 @@
 #ifndef NDX_PAPI_H
 #define NDX_PAPI_H
 
-#include "../include/ndx.h"
+#include "../include/ttypt/ndx.h"
 
 typedef struct {
 	ndx_call_t *call;
