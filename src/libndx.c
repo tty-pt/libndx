@@ -179,12 +179,12 @@ shared_init(void)
 __attribute__((constructor)) static void
 ndx_init(void)
 {
-	sica_hd = qmap_open(QM_HNDL, QM_PTR, SICA_MASK, QM_AINDEX);
-	sican_hd = qmap_open(QM_STR, QM_HNDL, SICA_MASK, 0);
+	sica_hd = qmap_open(NULL, NULL, QM_HNDL, QM_PTR, SICA_MASK, QM_AINDEX);
+	sican_hd = qmap_open(NULL, NULL, QM_STR, QM_HNDL, SICA_MASK, 0);
 	qmap_assoc(sican_hd, sica_hd, NULL);
 
-	mod_hd = qmap_open(QM_HNDL, QM_PTR, MOD_MASK, QM_AINDEX);
-	modn_hd = qmap_open(QM_STR, QM_HNDL, MOD_MASK, 0);
+	mod_hd = qmap_open(NULL, NULL, QM_HNDL, QM_PTR, MOD_MASK, QM_AINDEX);
+	modn_hd = qmap_open(NULL, NULL, QM_STR, QM_HNDL, MOD_MASK, 0);
 	qmap_assoc(modn_hd, mod_hd, NULL);
 
 	shared_init();
