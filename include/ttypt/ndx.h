@@ -148,9 +148,16 @@ typedef void (*mod_cb_t)(void);
 #endif
 
 #if defined(__APPLE__)
-#define _DATA_SECTION(name) __attribute__((used, section("__DATA," #name)))
+  #define _DATA_SECTION(name) \
+      __attribute__((used, section("__DATA," #name)))
+
+#elif defined(_WIN32)
+  /* COFF does NOT support ELF-style sections */
+  #define _DATA_SECTION(name) __attribute__((used))
+
 #else
-#define _DATA_SECTION(name) __attribute__((used, section("." #name)))
+  #define _DATA_SECTION(name) \
+      __attribute__((used, section("." #name)))
 #endif
 
 /* the callee uses this to be called */
