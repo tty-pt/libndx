@@ -1,3 +1,17 @@
+/**
+ * @page ndx libndx
+ * @brief Modding and extensibility API.
+ *
+ * @section ndx_synopsis Synopsis
+ * @code
+ * NDX_DECL(int, on_tick, int, dt);
+ * NDX_DEF(int, on_tick, int, dt);
+ * call_on_tick(16);
+ * @endcode
+ *
+ * @section ndx_notes Notes
+ * On Windows, call your *_adapter_reg() functions explicitly.
+ */
 #ifndef NDX_H
 #define NDX_H
 
@@ -148,11 +162,21 @@ typedef void (*mod_cb_t)(void);
 #endif
 
 #if defined(__APPLE__)
-#define _DATA_SECTION(name) __attribute__((used, section("__DATA," #name)))
+  #define _DATA_SECTION(name) \
+      __attribute__((used, section("__DATA," #name)))
+
+#elif defined(_WIN32)
+  /* COFF does NOT support ELF-style sections */
+  #define _DATA_SECTION(name) __attribute__((used))
+
 #else
-#define _DATA_SECTION(name) __attribute__((used, section("." #name)))
+  #define _DATA_SECTION(name) \
+      __attribute__((used, section("." #name)))
 #endif
 
+/**
+ * @brief Declare a mod-callable function signature and stubs.
+ */
 /* the callee uses this to be called */
 #define NDX_DECL(ftype, fname, ...) \
     typedef ftype fname##_t(NDX_FA(__VA_ARGS__)); \
@@ -160,7 +184,7 @@ typedef void (*mod_cb_t)(void);
     struct fname##_args { \
         NDX_PG(__VA_ARGS__) \
     }; \
-    __ID_MARKER__ unsigned fname##_id; \
+    __ID_MARKER__ unsigned fname##_id = NDX_INVALID; \
     static inline UNUSED \
     ftype call_##fname(NDX_FA(__VA_ARGS__)) { \
 	    ftype ret; \
@@ -175,6 +199,9 @@ typedef void (*mod_cb_t)(void);
     _DATA_SECTION("ndx_auto_init") \
     static mod_cb_t fname##_init_id_p = &fname##_init_id // note lack of semicolon
 
+/**
+ * @brief Define a mod-callable function and its adapter.
+ */
 #define NDX_DEF(ftype, fname, ...) \
     fname##_t fname; \
     void fname##_adapter_call(void *res, void *fn, void *arg) { \
@@ -202,9 +229,14 @@ typedef void (*mod_cb_t)(void);
     _DATA_SECTION("ndx_auto_init") \
     void (*fname##_adapter_reg_p)(void) = fname##_adapter_reg // note lack of semicolon
 
+/**
+ * @brief Call a mod hook by name, using its adapter id.
+ */
 /* the caller uses this to call */
 #define NDX_CALL(retp, fname, ...) { \
 	struct fname##_args args = { __VA_ARGS__ }; \
+	if (fname##_id == NDX_INVALID) \
+		fname##_init_id(); \
 	if (fname##_id == NDX_INVALID) \
 		WARN("NDX_CALL BAD %s\n", XSTR(fname)); \
 	ndx_call(retp, fname##_id, &args); \
