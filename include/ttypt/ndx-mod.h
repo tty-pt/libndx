@@ -1,9 +1,9 @@
-#ifndef NDX_PAPI_H
-#define NDX_PAPI_H
+#ifndef NDX_MOD_H
+#define NDX_MOD_H
 
-#include "../include/ttypt/ndx.h"
+#include "ndx.h"
 
-typedef struct {
+struct ndx_ctx {
 	ndx_call_t *call;
 	ndx_areg_t *areg;
 	ndx_get_t *get;
@@ -13,8 +13,17 @@ typedef struct {
 	ndx_adapter_t *adapter;
 	ndx_last_t *last;
 	ndx_shutdown_t *shutdown;
-} ndx_t;
+};
 
-extern ndx_t ndx;
+static struct ndx_ctx ndx;
+
+struct ndx_ctx;
+
+MODULE_API struct ndx_ctx *
+get_ndx_ptr(void)
+{
+	return &ndx;
+}
 
 #endif
+

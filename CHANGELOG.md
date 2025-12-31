@@ -1,3 +1,19 @@
+## [0.2.0] - 2026-02-22
+- Add comprehensive test suite with multiple test cases
+- Add Rust bindings scaffolding
+- Expand README with detailed library usage documentation
+- Add pre-commit git hooks
+- Normalize code indentation to tabs
+- Fix mingw section handling
+- Documentation improvements and consistency fixes
+
+## [0.1.2] - 2026-02-17
+- Expand README with usage and Windows notes
+- Fix adapter lookup in ndx_call and safe ndx_get
+- Add lazy init path for Windows
+- Make ndx_load honor ndx_open on reload
+- Update pkg-config metadata
+
 ## [0.1.1] - 2025-10-24
 - Update to libqmap 0.5.0
 
