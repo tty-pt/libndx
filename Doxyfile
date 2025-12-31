@@ -1,0 +1,5 @@
+@INCLUDE = ../mk/Doxyfile
+PROJECT_NAME           = "ndx"
+MAN_EXTENSION          = 3
+MAN_LINKS              = YES
+SEPARATE_MEMBER_PAGES  = YES

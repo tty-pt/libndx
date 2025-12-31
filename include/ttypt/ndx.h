@@ -1,3 +1,17 @@
+/**
+ * @page ndx libndx
+ * @brief Modding and extensibility API.
+ *
+ * @section ndx_synopsis Synopsis
+ * @code
+ * NDX_DECL(int, on_tick, int, dt);
+ * NDX_DEF(int, on_tick, int, dt);
+ * call_on_tick(16);
+ * @endcode
+ *
+ * @section ndx_notes Notes
+ * On Windows, call your *_adapter_reg() functions explicitly.
+ */
 #ifndef NDX_H
 #define NDX_H
 
@@ -15,31 +29,45 @@
 #include <string.h>
 #include <ttypt/qsys.h>
 
+#define NDX_MAX_RET_SIZE 4096
+
+#define WEAK __attribute__((weak))
+#define NDX_INVALID ((unsigned) -1)
+
+/* mark intentionally-unused symbols/params */
+#define UNUSED __attribute__((unused))
+
+#define NDX_OK             0
+#define NDX_ERR_NOTFOUND  -1
+#define NDX_ERR_INVALID   -2
+#define NDX_ERR_TOOBIG    -3
+#define NDX_ERR_INIT      -4
+#define NDX_ERR_LOCK      -5
+#define NDX_ERR_CYCLE     -6
+#define NDX_ERR_DEPS      -7
+
 typedef struct {
 	char name[64];
 	size_t arg_size;
 	size_t ret_size;
 	void (*call)(void *, void *, void *);
-	char ret[5096];
+	char ret[NDX_MAX_RET_SIZE];
 	unsigned ran;
 } ndx_adapter_t;
-
-#define WEAK __attribute__((weak))
-#define NDX_INVALID ((unsigned) -1)
 
 #define CAT(a, ...) PRIMITIVE_CAT(a, __VA_ARGS__)
 #define PRIMITIVE_CAT(a, ...) a ## __VA_ARGS__
 
 #define NDX_PC(...) \
-	         PP_NARG_(__VA_ARGS__, PAIR_RSEQ_N())
+			 PP_NARG_(__VA_ARGS__, PAIR_RSEQ_N())
 #define PP_NARG_(...) \
 	PP_ARG_N(__VA_ARGS__)
 
 #define PP_ARG_N( \
 		 _1,  _2,  _3,  _4,  _5,  _6,  _7,  _8, \
-	       	_9, _10, _11, _12, _13, _14, _15, _16, \
+			_9, _10, _11, _12, _13, _14, _15, _16, \
 		_17, _18, _19, _20, _21, _22, _23, _24, \
-	       	_25, _26, _27, _28, _29, _30, _31, _32, \
+			_25, _26, _27, _28, _29, _30, _31, _32, \
 		_33, _34, _35, _36, _37, _38, _39, _40, \
 		_41, _42, _43, _44, _45, _46, _47, _48, \
 		_49, _50, _51, _52, _53, _54, _55, _56, \
@@ -148,38 +176,54 @@ typedef void (*mod_cb_t)(void);
 #endif
 
 #if defined(__APPLE__)
-#define _DATA_SECTION(name) __attribute__((used, section("__DATA," #name)))
+  #define _DATA_SECTION(name) \
+	  __attribute__((used, section("__DATA," #name)))
+
+#elif defined(_WIN32)
+  /* COFF does NOT support ELF-style sections */
+  #define _DATA_SECTION(name) __attribute__((used))
+
 #else
-#define _DATA_SECTION(name) __attribute__((used, section("." #name)))
+  #define _DATA_SECTION(name) \
+	  __attribute__((used, section("." #name)))
 #endif
 
+/**
+ * @brief Declare a mod-callable function signature and stubs.
+ */
 /* the callee uses this to be called */
 #define NDX_DECL(ftype, fname, ...) \
-    typedef ftype fname##_t(NDX_FA(__VA_ARGS__)); \
-    fname##_t fname WEAK; \
-    struct fname##_args { \
-        NDX_PG(__VA_ARGS__) \
-    }; \
-    __ID_MARKER__ unsigned fname##_id; \
-    static inline UNUSED \
-    ftype call_##fname(NDX_FA(__VA_ARGS__)) { \
-	    ftype ret; \
-	    memset(&ret, 0, sizeof(ret)); \
-	    NDX_CALL(&ret, fname, NDX_DA(__VA_ARGS__)); \
-	    return ret; \
-    } \
-    __attribute__((used)) \
-    static void fname##_init_id(void) { \
-	    fname##_id = ndx_get(XSTR(fname)); \
-    } \
-    _DATA_SECTION("ndx_auto_init") \
-    static mod_cb_t fname##_init_id_p = &fname##_init_id // note lack of semicolon
+	typedef ftype fname##_t(NDX_FA(__VA_ARGS__)); \
+	fname##_t fname WEAK; \
+	struct fname##_args { \
+		NDX_PG(__VA_ARGS__) \
+	}; \
+	__ID_MARKER__ unsigned fname##_id = NDX_INVALID; \
+	__attribute__((used)) \
+	static void fname##_init_id(void); \
+	static inline UNUSED \
+	ftype call_##fname(NDX_FA(__VA_ARGS__)) { \
+		ftype ret; \
+		memset(&ret, 0, sizeof(ret)); \
+		NDX_CALL(&ret, fname, NDX_DA(__VA_ARGS__)); \
+		return ret; \
+	} \
+	static void fname##_init_id(void) { \
+		fname##_id = ndx_get(XSTR(fname)); \
+	} \
+	_DATA_SECTION("ndx_auto_init") \
+	static mod_cb_t fname##_init_id_p = &fname##_init_id // note lack of semicolon
 
+/**
+ * @brief Define a mod-callable function and its adapter.
+ */
 #define NDX_DEF(ftype, fname, ...) \
-    fname##_t fname; \
-    void fname##_adapter_call(void *res, void *fn, void *arg) { \
+	_Static_assert(sizeof(ftype) <= NDX_MAX_RET_SIZE, \
+		"return type too large for ndx_adapter_t"); \
+	fname##_t fname; \
+	void fname##_adapter_call(void *res, void *fn, void *arg) { \
 	fname##_t *cast_fn; \
-        struct fname##_args args; \
+		struct fname##_args args; \
 	memcpy(&args, arg, sizeof(args)); \
 	if (!fn) { \
 		WARN("%s_adapter_call: '%s' wasn't defined\n", \
@@ -187,34 +231,41 @@ typedef void (*mod_cb_t)(void);
 		return; \
 	} \
 	* (void **) &cast_fn = fn; \
-        ftype result = cast_fn(NDX_NA(__VA_ARGS__)); \
+		ftype result = cast_fn(NDX_NA(__VA_ARGS__)); \
 	if (res) memcpy(res, &result, sizeof(ftype)); \
-    } \
-    ndx_adapter_t fname##_adapter  __attribute__((visibility("default"))) = { \
-	    .name = XSTR(fname), \
-	    .arg_size = sizeof(struct fname##_args), \
-	    .ret_size = sizeof(ftype), \
-	    .call = &fname##_adapter_call, \
-    }; \
-    void fname##_adapter_reg(void) { \
-	    fname##_id = ndx_areg(XSTR(fname), &fname##_adapter); \
-    } \
-    _DATA_SECTION("ndx_auto_init") \
-    void (*fname##_adapter_reg_p)(void) = fname##_adapter_reg // note lack of semicolon
+	} \
+	ndx_adapter_t fname##_adapter  __attribute__((visibility("default"))) = { \
+		.name = XSTR(fname), \
+		.arg_size = sizeof(struct fname##_args), \
+		.ret_size = sizeof(ftype), \
+		.call = &fname##_adapter_call, \
+	}; \
+	void fname##_adapter_reg(void) { \
+		fname##_id = ndx_areg(XSTR(fname), &fname##_adapter); \
+	} \
+	_DATA_SECTION("ndx_auto_init") \
+	void (*fname##_adapter_reg_p)(void) = fname##_adapter_reg // note lack of semicolon
 
+/**
+ * @brief Call a mod hook by name, using its adapter id.
+ */
 /* the caller uses this to call */
 #define NDX_CALL(retp, fname, ...) { \
 	struct fname##_args args = { __VA_ARGS__ }; \
 	if (fname##_id == NDX_INVALID) \
+		fname##_init_id(); \
+	if (fname##_id == NDX_INVALID) { \
 		WARN("NDX_CALL BAD %s\n", XSTR(fname)); \
-	ndx_call(retp, fname##_id, &args); \
+	} else { \
+		ndx_call(retp, fname##_id, &args); \
+	} \
 }
 
 typedef unsigned ndx_areg_t(char *name,
 		ndx_adapter_t *adapter);
 ndx_areg_t ndx_areg;
 
-typedef void ndx_call_t(void *retp,
+typedef int ndx_call_t(void *retp,
 		unsigned id, void *args);
 ndx_call_t ndx_call;
 
@@ -224,7 +275,22 @@ ndx_last_t ndx_last;
 typedef unsigned ndx_get_t(char *name);
 ndx_get_t ndx_get;
 
-typedef void ndx_load_t(char *fname);
+typedef int ndx_load_t(char *fname);
 ndx_load_t ndx_load;
+
+typedef void ndx_shutdown_t(void);
+ndx_shutdown_t ndx_shutdown;
+
+typedef int ndx_errno_t(void);
+ndx_errno_t ndx_errno;
+
+typedef const char *ndx_strerror_t(int err);
+ndx_strerror_t ndx_strerror;
+
+typedef int ndx_depends_t(const char *name);
+ndx_depends_t ndx_depends;
+
+typedef int ndx_load_deps_t(char *fname);
+ndx_load_deps_t ndx_load_deps;
 
 #endif

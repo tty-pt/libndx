@@ -1,0 +1,13 @@
+#!/bin/sh
+# Lightweight pre-commit hook: fail-fast sanity checks
+
+# ensure script fails on error
+set -e
+
+# Fast dry-run of make to ensure nothing obviously broken in build rules
+if ! make -n >/dev/null 2>&1; then
+    echo "Pre-commit: make dry-run failed. Aborting commit."
+    exit 1
+fi
+
+exit 0
