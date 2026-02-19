@@ -1,3 +1,8 @@
 /lib
 /bin
-/src/*.o
+/tests/test_main
+/man
+*.so
+*.o
+*.dll
+*.exe

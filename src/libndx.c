@@ -41,6 +41,7 @@ enum opts {
 
 unsigned mod_hd,
 	 sica_hd, sican_hd;
+static uint32_t ndx_ptr_type;
 
 typedef ndx_t* (*get_ndx_func_t)(void);
 
@@ -48,13 +49,19 @@ ndx_t ndx;
 static int ndx_inited;
 static void ndx_init_once(void);
 
+static inline void *
+qmap_ptr(const void *value)
+{
+	return value ? *(void * const *) value : NULL;
+}
+
 void ndx_exist(void) {
 	ndx_init_once();
 	unsigned c = qmap_iter(mod_hd, NULL, 0);
 	const void *key, *value;
 
 	while (qmap_next(&key, &value, c))
-		dlclose((void *) value);
+		dlclose(qmap_ptr(value));
 }
 
 int _mod_run(void *sl, char *symbol) {
@@ -95,12 +102,12 @@ void _mod_load(char *fname) {
 		indx->load = ndx_load;
 	}
 
-	const void *m = qmap_get(mod_hd, fname);
+	const void *m = qmap_ptr(qmap_get(mod_hd, fname));
 	symbol = m ? "ndx_open" : "ndx_install";
 
 	WARN("%s: '%s'\n", symbol, fname);
 
-	qmap_put(mod_hd, fname, sl);
+	qmap_put(mod_hd, fname, &sl);
 
 	* (void **) &auto_init = dlsym(sl, "mod_auto_init");
 
@@ -132,7 +139,7 @@ ndx_call(void *retp, unsigned id, void *arg)
 	unsigned c;
 
 	ndx_adapter_t adapter;
-	const ndx_adapter_t *reg = qmap_get(sica_hd, &id);
+	const ndx_adapter_t *reg = qmap_ptr(qmap_get(sica_hd, &id));
 	const void *key, *value;
 
 	if (!reg) {
@@ -146,14 +153,14 @@ ndx_call(void *retp, unsigned id, void *arg)
 
 	c = qmap_iter(mod_hd, NULL, 0);
 	while (qmap_next(&key, &value, c)) {
-		void *cb = dlsym((char *) value,
-				adapter.name);
+		void *handle = qmap_ptr(value);
+		void *cb = dlsym(handle, adapter.name);
 		if (!cb)
 			continue;
 
 		ndx_t *indx;
 		get_ndx_func_t get_ndx = NULL;
-		* (void **) &get_ndx = dlsym((char *) value, "get_ndx_ptr");
+		* (void **) &get_ndx = dlsym(handle, "get_ndx_ptr");
 		if (!get_ndx)
 			continue;
 		indx = get_ndx();
@@ -169,7 +176,7 @@ unsigned
 ndx_areg(char *name, ndx_adapter_t *adapter)
 {
 	ndx_init_once();
-	unsigned id = qmap_put(sica_hd, NULL, adapter);
+	unsigned id = qmap_put(sica_hd, NULL, &adapter);
 	qmap_put(sican_hd, name, &id);
 	return id;
 }
@@ -198,11 +205,14 @@ ndx_init_once(void)
 		return;
 	ndx_inited = 1;
 
-	sica_hd = qmap_open(NULL, NULL, QM_HNDL, QM_PTR, SICA_MASK, QM_AINDEX);
+	if (!ndx_ptr_type)
+		ndx_ptr_type = qmap_reg(sizeof(void *));
+
+	sica_hd = qmap_open(NULL, NULL, QM_HNDL, ndx_ptr_type, SICA_MASK, QM_AINDEX);
 	sican_hd = qmap_open(NULL, NULL, QM_STR, QM_HNDL, SICA_MASK, 0);
 	qmap_assoc(sican_hd, sica_hd, NULL);
 
-	mod_hd = qmap_open(NULL, NULL, QM_STR, QM_PTR, MOD_MASK, 0);
+	mod_hd = qmap_open(NULL, NULL, QM_STR, ndx_ptr_type, MOD_MASK, 0);
 
 	shared_init();
 }
