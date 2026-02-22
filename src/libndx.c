@@ -49,7 +49,8 @@
   #include <dlfcn.h>
   #include <pthread.h>
 
-  static pthread_mutex_t ndx_mutex = PTHREAD_MUTEX_INITIALIZER;
+  static pthread_mutex_t ndx_mutex;
+  static int ndx_mutex_inited = 0;
   static __thread int ndx_err_val;
 
   #define NDX_LOCK() pthread_mutex_lock(&ndx_mutex)
@@ -57,8 +58,22 @@
   #define NDX_SET_ERR(e) (ndx_err_val = (e))
   #define NDX_GET_ERR() (ndx_err_val)
 
-  static void ndx_mutex_init(void) {}
-  static void ndx_mutex_destroy(void) {}
+  static void ndx_mutex_init(void) {
+	  if (!ndx_mutex_inited) {
+		  pthread_mutexattr_t attr;
+		  pthread_mutexattr_init(&attr);
+		  pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+		  pthread_mutex_init(&ndx_mutex, &attr);
+		  pthread_mutexattr_destroy(&attr);
+		  ndx_mutex_inited = 1;
+	  }
+  }
+  static void ndx_mutex_destroy(void) {
+	  if (ndx_mutex_inited) {
+		  pthread_mutex_destroy(&ndx_mutex);
+		  ndx_mutex_inited = 0;
+	  }
+  }
 #endif
 
 #include <string.h>
@@ -425,16 +440,18 @@ ndx_get(char *name)
 {
 	ndx_init_once();
 	NDX_LOCK();
-	const unsigned *id = qmap_get(sican_hd, name);
-	unsigned ret = id ? *id : NDX_INVALID;
-	if (ret == NDX_INVALID) {
-		const unsigned *d = qmap_get(sican_direct_hd, name);
-		if (d) ret = *d;
-	}
-	/* debug: log lookups */
-	fprintf(stderr, "ndx_get: lookup '%s' -> %u\n", name, ret == NDX_INVALID ? (unsigned)NDX_INVALID : ret);
-	NDX_UNLOCK();
-	return ret;
+    const unsigned *id = qmap_get(sican_hd, name);
+    unsigned ret = id ? *id : NDX_INVALID;
+    if (ret == NDX_INVALID) {
+        const unsigned *d = qmap_get(sican_direct_hd, name);
+        if (d) ret = *d;
+    }
+    /* debug: log lookups (enable by defining NDX_DEBUG) */
+#ifdef NDX_DEBUG
+    fprintf(stderr, "ndx_get: lookup '%s' -> %u\n", name, ret == NDX_INVALID ? (unsigned)NDX_INVALID : ret);
+#endif
+    NDX_UNLOCK();
+    return ret;
 }
 
 void
