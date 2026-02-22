@@ -29,17 +29,26 @@
 #include <string.h>
 #include <ttypt/qsys.h>
 
+#define NDX_MAX_RET_SIZE 4096
+
+#define WEAK __attribute__((weak))
+#define NDX_INVALID ((unsigned) -1)
+
+#define NDX_OK           0
+#define NDX_ERR_NOTFOUND -1
+#define NDX_ERR_INVALID  -2
+#define NDX_ERR_TOOBIG   -3
+#define NDX_ERR_INIT     -4
+#define NDX_ERR_LOCK     -5
+
 typedef struct {
 	char name[64];
 	size_t arg_size;
 	size_t ret_size;
 	void (*call)(void *, void *, void *);
-	char ret[5096];
+	char ret[NDX_MAX_RET_SIZE];
 	unsigned ran;
 } ndx_adapter_t;
-
-#define WEAK __attribute__((weak))
-#define NDX_INVALID ((unsigned) -1)
 
 #define CAT(a, ...) PRIMITIVE_CAT(a, __VA_ARGS__)
 #define PRIMITIVE_CAT(a, ...) a ## __VA_ARGS__
@@ -256,7 +265,16 @@ ndx_last_t ndx_last;
 typedef unsigned ndx_get_t(char *name);
 ndx_get_t ndx_get;
 
-typedef void ndx_load_t(char *fname);
+typedef int ndx_load_t(char *fname);
 ndx_load_t ndx_load;
+
+typedef void ndx_shutdown_t(void);
+ndx_shutdown_t ndx_shutdown;
+
+typedef int ndx_errno_t(void);
+ndx_errno_t ndx_errno;
+
+typedef const char *ndx_strerror_t(int err);
+ndx_strerror_t ndx_strerror;
 
 #endif
