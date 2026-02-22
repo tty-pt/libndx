@@ -131,7 +131,7 @@ const char *ndx_strerror(int err) {
 	}
 }
 
-void ndx_exist(void) {
+static void ndx_exist(void) {
 	ndx_init_once();
 	NDX_LOCK();
 	unsigned c = qmap_iter(mod_hd, NULL, 0);

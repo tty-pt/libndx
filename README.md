@@ -53,7 +53,7 @@ int main(void)
 #include <ttypt/ndx.h>
 #include "src/papi.h"
 
-ndx_t ndx;
+ndx_t ndx;  // Host populates this via get_ndx_ptr()
 
 NDX_DECL(int, on_tick, int, dt);
 
@@ -69,16 +69,16 @@ void ndx_install(void)
 
 void ndx_open(void)
 {
-	// subsequent loads
+	// subsequent loads (optional)
 }
 
 ndx_t* get_ndx_ptr(void)
 {
-	return &ndx;
+	return &ndx;  // Host uses this to inject API functions
 }
 ```
 
-`ndx_load()` runs `ndx_install()` on first load and `ndx_open()` on reload.
+`ndx_load()` runs `ndx_install()` on first load and `ndx_open()` on reload (if present).
 
 ## Host-Side API
 
@@ -86,14 +86,14 @@ ndx_t* get_ndx_ptr(void)
 |----------|-------------|
 | `NDX_DEF(type, name, args...)` | Define a hook adapter |
 | `NDX_DECL(type, name, args...)` | Declare a hook (without adapter) |
-| `NDX_CALL(retp, name, args...)` | Call a hook by name (macro) |
+| `NDX_CALL(retp, name, args...)` | Call a hook by name (example: `NDX_CALL(&ret, on_tick, 16)`) |
 | `ndx_load(path)` | Load/reload a module (returns error code) |
 | `ndx_areg(name, adapter)` | Register an adapter manually |
 | `ndx_get(name)` | Look up adapter ID by name |
 | `ndx_last(ret)` | Get last hook's return value |
 | `ndx_errno()` | Get last error code |
 | `ndx_strerror(err)` | Human-readable error string |
-| `ndx_shutdown()` | Clean up resources |
+| `ndx_shutdown()` | Clean up resources (closes modules on POSIX) |
 
 ### NDX_DEF Expansion
 
@@ -123,9 +123,21 @@ ndx_t* get_ndx_ptr(void)
 | Function | Description |
 |----------|-------------|
 | `NDX_DECL(type, name, args...)` | Declare a hook to implement |
+| `get_ndx_ptr()` | Export `ndx_t*` to receive host function pointers |
+| `mod_auto_init()` | Optional: Called after load, before install/open |
 | `ndx_install()` | Called on first load |
-| `ndx_open()` | Called on reload |
-| `get_ndx_ptr()` | Export to receive host function pointers |
+| `ndx_open()` | Optional: Called on reload |
+| `ndx_deps[]` | Optional: NULL-terminated array of dependency paths |
+
+### Module Initialization Lifecycle
+
+When `ndx_load("module.so")` is called, the following happens in order:
+
+1. `dlopen()` - Load the shared library
+2. `get_ndx_ptr()` - Host populates `ndx_t*` with function pointers
+3. Load dependencies from `ndx_deps[]` (if present)
+4. `mod_auto_init()` - Optional auto-initialization hook
+5. `ndx_install()` - First load only, **OR** `ndx_open()` - Subsequent loads (optional)
 
 ## Linking
 
@@ -151,12 +163,11 @@ This section shows the common usage pattern for a host program that wants to exp
 
 1) Define and register the adapter signature
 
- - In your host source, declare and define the hook signature with the provided macros. Example:
+ - In your host source, define the hook signature with the provided macro. Example:
 
  ```c
  #include <ttypt/ndx.h>
 
- NDX_DECL(int, on_tick, int, dt);
  NDX_DEF(int, on_tick, int, dt);
 
  int main(void) {
@@ -166,7 +177,7 @@ This section shows the common usage pattern for a host program that wants to exp
  }
  ```
 
- The `NDX_DEF` macro creates `on_tick_adapter_reg()`, an `on_tick_id` symbol and the typed helper `call_on_tick(dt)`.
+ The `NDX_DEF` macro creates `on_tick_adapter_reg()`, an `on_tick_id` symbol and the typed helper `call_on_tick(dt)`. Note: Use `NDX_DEF` in the host; modules use `NDX_DECL`.
 
 2) Load modules
 
@@ -233,7 +244,6 @@ Examples
  #include <stdio.h>
  #include <ttypt/ndx.h>
 
- NDX_DECL(int, on_tick, int, dt);
  NDX_DEF(int, on_tick, int, dt);
 
  int main(void) {
