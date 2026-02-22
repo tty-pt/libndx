@@ -11,6 +11,11 @@ typedef struct {
 	ndx_errno_t *err;
 	ndx_strerror_t *strerror;
 	ndx_adapter_t *adapter;
+	/* additional runtime helpers exposed to modules */
+	ndx_last_t *last;
+	ndx_shutdown_t *shutdown;
+	ndx_depends_t *depends;
+	ndx_load_deps_t *load_deps;
 } ndx_t;
 
 extern ndx_t ndx;

@@ -30,6 +30,10 @@ ${TEST_DIR}/test_main${EXE}: ${TEST_DIR} ${TEST_DIR}/test_main.c lib/libndx.${SO
 	${cc} -o $@ ${TEST_DIR}/test_main.c ${CFLAGS} ${TEST_CFLAGS} \
 		${LDFLAGS} -lndx ${LDLIBS-libndx}
 
+${TEST_DIR}/test_deps${EXE}: ${TEST_DIR} ${TEST_DIR}/test_deps.c lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/test_deps.c ${CFLAGS} ${TEST_CFLAGS} \
+		${LDFLAGS} -lndx ${LDLIBS-libndx} ${TEST_LDFLAGS}
+
 ${TEST_DIR}/test_mod.${SO}: ${TEST_DIR} ${TEST_DIR}/test_mod.c lib/libndx-mod.${SO}
 	${cc} -o $@ ${TEST_DIR}/test_mod.c ${CFLAGS} ${TEST_CFLAGS} \
 		-fPIC -shared ${LDFLAGS} -lndx-mod
@@ -50,17 +54,33 @@ ${TEST_DIR}/mods/mod_bare.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_bare.c lib/lib
 	${cc} -o $@ ${TEST_DIR}/mods/mod_bare.c ${CFLAGS} ${TEST_CFLAGS} \
 		-fPIC -shared ${LDFLAGS} -lndx-mod
 
+${TEST_DIR}/mods/mod_dep.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_dep.c lib/libndx-mod.${SO}
+	${cc} -o $@ ${TEST_DIR}/mods/mod_dep.c ${CFLAGS} ${TEST_CFLAGS} \
+		-fPIC -shared ${LDFLAGS} -lndx-mod
+
+${TEST_DIR}/mods/mod_dep_b.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_dep_b.c lib/libndx-mod.${SO}
+	${cc} -o $@ ${TEST_DIR}/mods/mod_dep_b.c ${CFLAGS} ${TEST_CFLAGS} \
+		-fPIC -shared ${LDFLAGS} -lndx-mod
+
+${TEST_DIR}/mods/mod_dep_c.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_dep_c.c lib/libndx-mod.${SO}
+	${cc} -o $@ ${TEST_DIR}/mods/mod_dep_c.c ${CFLAGS} ${TEST_CFLAGS} \
+		-fPIC -shared ${LDFLAGS} -lndx-mod
+
 TEST_MODS := ${TEST_DIR}/test_mod.${SO} \
 	${TEST_DIR}/mods/mod_basic.${SO} \
 	${TEST_DIR}/mods/mod_multi.${SO} \
 	${TEST_DIR}/mods/mod_void.${SO} \
-	${TEST_DIR}/mods/mod_bare.${SO}
+	${TEST_DIR}/mods/mod_bare.${SO} \
+	${TEST_DIR}/mods/mod_dep.${SO} \
+	${TEST_DIR}/mods/mod_dep_b.${SO} \
+	${TEST_DIR}/mods/mod_dep_c.${SO}
 
 TEST_BINS := ${TEST_DIR}/test_core${EXE} \
 	${TEST_DIR}/test_errors${EXE} \
 	${TEST_DIR}/test_threads${EXE} \
 	${TEST_DIR}/test_macros${EXE} \
-	${TEST_DIR}/test_main${EXE}
+	${TEST_DIR}/test_main${EXE} \
+	${TEST_DIR}/test_deps${EXE}
 
 test-build: lib/libndx.${SO} lib/libndx-mod.${SO} ${TEST_MODS} ${TEST_BINS}
 
@@ -73,6 +93,8 @@ test: test-build
 	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_threads
 	@echo "Running test_macros..."
 	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_macros
+	@echo "Running test_deps..."
+	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_deps
 	@echo "Running test_main..."
 	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_main
 	@echo "All tests passed!"
