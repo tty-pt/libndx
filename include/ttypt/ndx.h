@@ -34,6 +34,9 @@
 #define WEAK __attribute__((weak))
 #define NDX_INVALID ((unsigned) -1)
 
+/* mark intentionally-unused symbols/params */
+#define UNUSED __attribute__((unused))
+
 #define NDX_OK             0
 #define NDX_ERR_NOTFOUND  -1
 #define NDX_ERR_INVALID   -2

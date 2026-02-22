@@ -425,16 +425,18 @@ ndx_get(char *name)
 {
 	ndx_init_once();
 	NDX_LOCK();
-	const unsigned *id = qmap_get(sican_hd, name);
-	unsigned ret = id ? *id : NDX_INVALID;
-	if (ret == NDX_INVALID) {
-		const unsigned *d = qmap_get(sican_direct_hd, name);
-		if (d) ret = *d;
-	}
-	/* debug: log lookups */
-	fprintf(stderr, "ndx_get: lookup '%s' -> %u\n", name, ret == NDX_INVALID ? (unsigned)NDX_INVALID : ret);
-	NDX_UNLOCK();
-	return ret;
+    const unsigned *id = qmap_get(sican_hd, name);
+    unsigned ret = id ? *id : NDX_INVALID;
+    if (ret == NDX_INVALID) {
+        const unsigned *d = qmap_get(sican_direct_hd, name);
+        if (d) ret = *d;
+    }
+    /* debug: log lookups (enable by defining NDX_DEBUG) */
+#ifdef NDX_DEBUG
+    fprintf(stderr, "ndx_get: lookup '%s' -> %u\n", name, ret == NDX_INVALID ? (unsigned)NDX_INVALID : ret);
+#endif
+    NDX_UNLOCK();
+    return ret;
 }
 
 void

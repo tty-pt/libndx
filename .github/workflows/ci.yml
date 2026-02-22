@@ -1,24 +1,21 @@
-name: ci
+name: CI
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
 
 jobs:
-  build:
-    uses: tty-pt/ci/.github/workflows/all-in-one.yml@main
-    with:
-      name: libndx
-      deps: "libqmap"
-      deps_pacman_mingw: "mingw-w64-libqmap"
-    secrets:
-      HOST: ${{ secrets.OPENBSD_HOST }}
-      USER: ${{ secrets.OPENBSD_USER }}
-      SSH_KEY: ${{ secrets.OPENBSD_SSH_KEY }}
-      GPG_PRIVATE_KEY: ${{ secrets.OPENBSD_GPG_PRIVATE_KEY }}
-      GPG_PASSPHRASE: ${{ secrets.OPENBSD_GPG_PASSPHRASE }}
-      GPG_KEYID: ${{ secrets.OPENBSD_GPG_KEY_ID }}
-      ABUILD_PRIVATE_KEY: ${{ secrets.ABUILD_PRIVATE_KEY }}
-      ABUILD_PUBLIC_KEY: ${{ secrets.ABUILD_PUBLIC_KEY }}
-      TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config
+      - name: Build
+        run: make
+      - name: Run tests
+        run: make test
