@@ -32,7 +32,6 @@ static void test_last_no_call(void) {
 static void test_errno_persists(void) {
 	ndx_load("./tests/nonexistent.so");
 	assert(ndx_errno() == NDX_ERR_NOTFOUND);
-	dummy_hook_adapter_reg();
 	assert(dummy_hook_id != NDX_INVALID);
 	int result = call_dummy_hook(42);
 	(void)result;

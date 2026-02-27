@@ -7,8 +7,6 @@ NDX_DECL(int, test_hook, int, a, int, b);
 NDX_DEF(int, test_hook, int, a, int, b);
 
 static void test_adapter_reg_sets_id(void) {
-	assert(test_hook_id == NDX_INVALID);
-	test_hook_adapter_reg();
 	assert(test_hook_id != NDX_INVALID);
 	printf("  test_adapter_reg_sets_id: PASS\n");
 }

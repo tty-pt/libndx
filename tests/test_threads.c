@@ -119,7 +119,6 @@ static void build_mod_path(void) {
 int main(void) {
 	printf("test_threads:\n");
 	
-	thread_hook_adapter_reg();
 	build_mod_path();
 	
 	int ret = ndx_load(mod_path);

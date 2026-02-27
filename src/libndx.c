@@ -86,14 +86,13 @@
 
 #define MOD_MASK 0x7FFF
 #define SICA_MASK 0x7FFF
-#define DEPS_MASK 0x3FFF
 
 enum opts {
 	OPT_DETACH = 1,
 };
 
 unsigned mod_hd,
-	 sica_hd, sican_hd, deps_hd, sican_direct_hd;
+	 sica_hd, sican_hd, sican_direct_hd;
 static uint32_t ndx_ptr_type;
 
 typedef ndx_t* (*get_ndx_func_t)(void);
@@ -101,11 +100,6 @@ typedef ndx_t* (*get_ndx_func_t)(void);
 ndx_t ndx;
 static volatile int ndx_inited;
 static void ndx_init_once(void);
-static int load_dep(const char *fname);
-static int load_deps_for_module(void *sl);
-/* marker for visiting state in deps_hd */
-static char visiting_marker;
-static void *visiting_marker_ptr = &visiting_marker;
 
 static inline void *
 qmap_ptr(const void *value)
@@ -125,8 +119,6 @@ const char *ndx_strerror(int err) {
 	case NDX_ERR_TOOBIG:   return "return type too large";
 	case NDX_ERR_INIT:     return "initialization failed";
 	case NDX_ERR_LOCK:     return "lock error";
-	case NDX_ERR_CYCLE:    return "circular dependency";
-	case NDX_ERR_DEPS:     return "dependency error";
 	default:               return "unknown error";
 	}
 }
@@ -180,21 +172,6 @@ int _mod_load(char *fname) {
 		indx->load = ndx_load;
 		indx->last = ndx_last;
 		indx->shutdown = ndx_shutdown;
-		indx->depends = ndx_depends;
-		indx->load_deps = ndx_load_deps;
-	}
-
-	/* mark visiting so dependency recursion can detect cycles
-	 * (top-level loads go through _mod_load and must be tracked). Use
-	 * a stable address owned by this library so other SOs see the same
-	 * visiting sentinel. */
-	qmap_put(deps_hd, fname, &visiting_marker_ptr);
-
-	int ret = load_deps_for_module(sl);
-	if (ret != NDX_OK) {
-		dlclose(sl);
-		qmap_del(deps_hd, fname);
-		return ret;
 	}
 
 	const void *m = qmap_ptr(qmap_get(mod_hd, fname));
@@ -206,7 +183,7 @@ int _mod_load(char *fname) {
 	 * install fails we'll cleanup below. */
 	qmap_put(mod_hd, fname, &sl);
 
-	* (void **) &auto_init = dlsym(sl, "mod_auto_init");
+	* (void **) &auto_init = dlsym(RTLD_DEFAULT, "mod_auto_init");
 
 	if (auto_init)
 		((mod_cb_t) auto_init)();
@@ -221,115 +198,12 @@ int _mod_load(char *fname) {
 		} else {
 			/* cleanup on failure */
 			qmap_del(mod_hd, fname);
-			qmap_del(deps_hd, fname);
 			dlclose(sl);
 			return runret;
 		}
 	}
 
-	/* mark dependency as loaded (store handle) */
-	qmap_put(deps_hd, fname, &sl);
-
 	return NDX_OK;
-}
-
-static int load_dep(const char *fname);
-
-/* forward declare load_deps_for_module to avoid implicit declaration
- * when called from _mod_load */
-static int load_deps_for_module(void *sl);
-
-static int load_deps_for_module(void *sl) {
-	const char **deps = NULL;
-	* (void **) &deps = dlsym(sl, "ndx_deps");
-	if (!deps)
-		return NDX_OK;
-	
-	for (int i = 0; deps[i] != NULL; i++) {
-		int ret = load_dep(deps[i]);
-		if (ret != NDX_OK)
-			return ret;
-	}
-	return NDX_OK;
-}
-
-static int load_dep(const char *fname) {
-	if (!fname)
-		return NDX_ERR_INVALID;
-	const void *v = qmap_get(deps_hd, fname);
-	if (v) {
-		void *pv = qmap_ptr(v);
-		if (pv == visiting_marker_ptr) {
-			return NDX_ERR_CYCLE;
-		}
-		/* already loaded */
-		return NDX_OK;
-	}
-
-	/* mark as visiting using an address owned by this library */
-	qmap_put(deps_hd, fname, &visiting_marker_ptr);
-
-	void *sl = dlopen(fname, RTLD_NOW | RTLD_GLOBAL | RTLD_NODELETE);
-	if (!sl) {
-		WARN("load_dep failed loading '%s': %s\n",
-				fname, dlerror());
-		/* cleanup visiting mark */
-		qmap_del(deps_hd, fname);
-		return NDX_ERR_NOTFOUND;
-	}
-	
-	get_ndx_func_t get_ndx = NULL;
-	* (void **) &get_ndx = dlsym(sl, "get_ndx_ptr");
-	if (get_ndx) {
-		ndx_t *indx = get_ndx();
-		indx->call = ndx_call;
-		indx->areg = ndx_areg;
-		indx->get = ndx_get;
-		indx->load = ndx_load;
-		indx->last = ndx_last;
-		indx->shutdown = ndx_shutdown;
-		indx->depends = ndx_depends;
-		indx->load_deps = ndx_load_deps;
-	}
-	
-	int ret = load_deps_for_module(sl);
-	if (ret != NDX_OK) {
-		dlclose(sl);
-		/* cleanup visiting mark */
-		qmap_del(deps_hd, fname);
-		return ret;
-	}
-	
-	void (*auto_init)(void) = NULL;
-	* (void **) &auto_init = dlsym(sl, "mod_auto_init");
-	if (auto_init)
-		((mod_cb_t) auto_init)();
-	
-	_mod_run(sl, "ndx_install");
-	
-	qmap_put(mod_hd, fname, &sl);
-	/* mark dependency as loaded (store handle) */
-	qmap_put(deps_hd, fname, &sl);
-	
-	return NDX_OK;
-}
-
-int ndx_load_deps(char *fname) {
-	ndx_init_once();
-	NDX_LOCK();
-	int ret = load_dep(fname);
-	NDX_SET_ERR(ret);
-	NDX_UNLOCK();
-	return ret;
-}
-
-int ndx_depends(const char *name) {
-	ndx_init_once();
-	NDX_LOCK();
-	int ret = load_dep(name);
-	NDX_SET_ERR(ret);
-	NDX_UNLOCK();
-	return ret;
 }
 
 int ndx_load(char *fname) {
@@ -430,6 +304,7 @@ ndx_areg(char *name, ndx_adapter_t *adapter)
 	qmap_put(sican_hd, name, &id);
 	/* also update direct map */
 	qmap_put(sican_direct_hd, name, &id);
+	fprintf(stderr, "ndx_areg: registered '%s' -> id=%u\n", name, id);
 	NDX_SET_ERR(NDX_OK);
 	NDX_UNLOCK();
 	return id;
@@ -493,12 +368,7 @@ ndx_init_once(void)
 
 	sica_hd = qmap_open(NULL, NULL, QM_HNDL, ndx_ptr_type, SICA_MASK, QM_AINDEX);
 	sican_hd = qmap_open(NULL, NULL, QM_STR, QM_HNDL, SICA_MASK, 0);
-	/* a direct string->u32 map to store ids reliably */
 	sican_direct_hd = qmap_open(NULL, NULL, QM_STR, QM_U32, SICA_MASK, 0);
-	/* deps map: key=string name, value=pointer-sized so we can store
-	 * either a visiting sentinel (pointer owned by this library) or
-	 * a dlopen handle. Use ndx_ptr_type so values have pointer width. */
-	deps_hd = qmap_open(NULL, NULL, QM_STR, ndx_ptr_type, DEPS_MASK, 0);
 	qmap_assoc(sican_hd, sica_hd, NULL);
 
 	mod_hd = qmap_open(NULL, NULL, QM_STR, ndx_ptr_type, MOD_MASK, 0);

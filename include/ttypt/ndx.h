@@ -1,5 +1,5 @@
 /**
- * @page ndx libndx
+ * @file ndx.h
  * @brief Modding and extensibility API.
  *
  * @section ndx_synopsis Synopsis
@@ -9,8 +9,28 @@
  * call_on_tick(16);
  * @endcode
  *
- * @section ndx_notes Notes
- * On Windows, call your *_adapter_reg() functions explicitly.
+ * @section ndx_overview Overview
+ * libndx provides a plugin/module system where:
+ * - <b>Host</b> defines hooks and loads modules
+ * - <b>Module</b> implements hooks in a shared library
+ *
+ * @section ndx_usage Usage
+ * 1. Host uses NDX_DEF to define hook signatures
+ * 2. Host loads modules via ndx_load()
+ * 3. Modules use NDX_DEF to implement hooks they provide
+ * 4. Modules implement functions and export get_ndx_ptr()
+ *
+ * @section ndx_deps Dependencies
+ * Dependencies between modules are handled through the API:
+ * - Common headers use NDX_DECL for shared hook signatures
+ * - Implementing modules use NDX_DEF to define hooks
+ * - Dependent modules call ndx_load() in ndx_install() to load dependencies
+ * - Then use call_*() macros to invoke hooks from dependencies
+ *
+ * @section ndx_errors Error Handling
+ * - Functions return NDX_OK (0) on success or negative NDX_ERR_* on failure
+ * - Use ndx_errno() to get last error code
+ * - Use ndx_strerror(err) to get human-readable message
  */
 #ifndef NDX_H
 #define NDX_H
@@ -29,29 +49,84 @@
 #include <string.h>
 #include <ttypt/qsys.h>
 
+/**
+ * @brief Maximum size for return types in hooks.
+ *
+ * Return types larger than this will cause a compile-time static assertion
+ * when using NDX_DEF.
+ */
 #define NDX_MAX_RET_SIZE 4096
 
+/**
+ * @brief Weak symbol attribute for function declarations.
+ *
+ * Used in NDX_DECL to allow function to be optionally defined.
+ */
 #define WEAK __attribute__((weak))
+
+/**
+ * @brief Invalid hook ID returned when lookup fails.
+ */
 #define NDX_INVALID ((unsigned) -1)
 
-/* mark intentionally-unused symbols/params */
+/**
+ * @brief Mark intentionally-unused symbols or parameters.
+ */
 #define UNUSED __attribute__((unused))
 
+/**
+ * @brief Success return code.
+ */
 #define NDX_OK             0
-#define NDX_ERR_NOTFOUND  -1
-#define NDX_ERR_INVALID   -2
-#define NDX_ERR_TOOBIG    -3
-#define NDX_ERR_INIT      -4
-#define NDX_ERR_LOCK      -5
-#define NDX_ERR_CYCLE     -6
-#define NDX_ERR_DEPS      -7
 
+/**
+ * @brief Error: Module or hook not found.
+ */
+#define NDX_ERR_NOTFOUND  -1
+
+/**
+ * @brief Error: Invalid argument passed to function.
+ */
+#define NDX_ERR_INVALID   -2
+
+/**
+ * @brief Error: Return type exceeds NDX_MAX_RET_SIZE.
+ */
+#define NDX_ERR_TOOBIG    -3
+
+/**
+ * @brief Error: Library initialization failed.
+ */
+#define NDX_ERR_INIT      -4
+
+/**
+ * @brief Error: Lock/mutex operation failed.
+ */
+#define NDX_ERR_LOCK      -5
+
+/**
+ * @brief Adapter for dispatching hook calls to modules.
+ *
+ * This struct is used internally to route calls to all modules
+ * that implement a given hook. Created automatically by NDX_DEF.
+ */
 typedef struct {
+	/** @brief Name of the hook (e.g., "on_tick") */
 	char name[64];
+
+	/** @brief Size of the arguments struct */
 	size_t arg_size;
+
+	/** @brief Size of the return type */
 	size_t ret_size;
+
+	/** @brief Internal call dispatcher */
 	void (*call)(void *, void *, void *);
+
+	/** @brief Buffer for last return value */
 	char ret[NDX_MAX_RET_SIZE];
+
+	/** @brief Number of modules that ran this hook */
 	unsigned ran;
 } ndx_adapter_t;
 
@@ -163,6 +238,11 @@ typedef struct {
 #define STR(x) #x
 #define XSTR(x) STR(x)
 
+/**
+ * @brief Module callback function type.
+ *
+ * Used for mod_auto_init(), ndx_install(), ndx_open().
+ */
 typedef void (*mod_cb_t)(void);
 
 #ifndef __ID_MARKER__
@@ -170,26 +250,45 @@ typedef void (*mod_cb_t)(void);
 #endif
 
 #if defined(_WIN32)
+  /**
+   * @brief Export symbol from module (Windows).
+   */
   #define MODULE_API __declspec(dllexport)
 #else
+  /**
+   * @brief Export symbol from module (POSIX).
+   */
   #define MODULE_API __attribute__((visibility("default")))
 #endif
 
-#if defined(__APPLE__)
-  #define _DATA_SECTION(name) \
-	  __attribute__((used, section("__DATA," #name)))
-
-#elif defined(_WIN32)
-  /* COFF does NOT support ELF-style sections */
-  #define _DATA_SECTION(name) __attribute__((used))
-
+#if defined(_WIN32)
+  #define AUTO_INIT __attribute__((section(".ctors")))
 #else
-  #define _DATA_SECTION(name) \
-	  __attribute__((used, section("." #name)))
+  #define AUTO_INIT __attribute__((used)) __attribute__((section(".init_array")))
 #endif
 
 /**
- * @brief Declare a mod-callable function signature and stubs.
+ * @brief Declare a mod-callable function signature and call stubs.
+ *
+ * Use this in common header files shared between modules, or in modules
+ * that only need to call hooks without implementing them.
+ *
+ * Creates:
+ * - \c fname##_t: Function typedef for the hook
+ * - \c fname: Weak function symbol (optional implementation)
+ * - \c struct fname##_args: Argument structure
+ * - \c fname##_id: Adapter ID (set at runtime)
+ * - \c call_##fname(): Typed call wrapper function
+ *
+ * @param ftype Return type (e.g., int, void)
+ * @param fname Function name (e.g., on_tick)
+ * @param ... Argument types and names (e.g., int, dt)
+ *
+ * Example:
+ * @code
+ * NDX_DECL(int, on_tick, int, dt);
+ * // Creates: on_tick_t, struct on_tick_args, on_tick_id, call_on_tick(int)
+ * @endcode
  */
 /* the callee uses this to be called */
 #define NDX_DECL(ftype, fname, ...) \
@@ -203,6 +302,7 @@ typedef void (*mod_cb_t)(void);
 	static void fname##_init_id(void); \
 	static inline UNUSED \
 	ftype call_##fname(NDX_FA(__VA_ARGS__)) { \
+		WARN("Calling %s\n", XSTR(fname)); \
 		ftype ret; \
 		memset(&ret, 0, sizeof(ret)); \
 		NDX_CALL(&ret, fname, NDX_DA(__VA_ARGS__)); \
@@ -211,11 +311,32 @@ typedef void (*mod_cb_t)(void);
 	static void fname##_init_id(void) { \
 		fname##_id = ndx_get(XSTR(fname)); \
 	} \
-	_DATA_SECTION("ndx_auto_init") \
-	static mod_cb_t fname##_init_id_p = &fname##_init_id // note lack of semicolon
+	AUTO_INIT \
+	void (*fname##_init_id_p)(void) = fname##_init_id
 
 /**
- * @brief Define a mod-callable function and its adapter.
+ * @brief Define a mod-callable function (hook).
+ *
+ * Use this in modules that implement hooks. Allows the host to call
+ * this function from loaded modules.
+ *
+ * Creates:
+ * - \c fname##_t: Function typedef
+ * - \c fname: Function implementation (you provide this)
+ * - \c fname##_id: Hook ID (set on registration)
+ * - \c call_##fname(): Typed call wrapper
+ *
+ * The hook is auto-registered when the module loads.
+ *
+ * @param ftype Return type (e.g., int, void)
+ * @param fname Function name (e.g., on_tick)
+ * @param ... Argument types and names (e.g., int, dt)
+ *
+ * Example:
+ * @code
+ * NDX_DEF(int, on_tick, int, dt);
+ * int on_tick(int dt) { return dt + 1; }
+ * @endcode
  */
 #define NDX_DEF(ftype, fname, ...) \
 	_Static_assert(sizeof(ftype) <= NDX_MAX_RET_SIZE, \
@@ -243,11 +364,24 @@ typedef void (*mod_cb_t)(void);
 	void fname##_adapter_reg(void) { \
 		fname##_id = ndx_areg(XSTR(fname), &fname##_adapter); \
 	} \
-	_DATA_SECTION("ndx_auto_init") \
+	AUTO_INIT \
 	void (*fname##_adapter_reg_p)(void) = fname##_adapter_reg // note lack of semicolon
 
 /**
- * @brief Call a mod hook by name, using its adapter id.
+ * @brief Call a mod hook by name, using its hook id.
+ *
+ * This macro calls all modules that implement the named hook.
+ * The return value is from the last module that ran.
+ *
+ * @param retp Pointer to store return value
+ * @param fname Hook function name
+ * @param ... Arguments to pass to the hook
+ *
+ * Example:
+ * @code
+ * int result;
+ * NDX_CALL(&result, on_tick, 16);
+ * @endcode
  */
 /* the caller uses this to call */
 #define NDX_CALL(retp, fname, ...) { \
@@ -261,36 +395,55 @@ typedef void (*mod_cb_t)(void);
 	} \
 }
 
-typedef unsigned ndx_areg_t(char *name,
-		ndx_adapter_t *adapter);
-ndx_areg_t ndx_areg;
-
-typedef int ndx_call_t(void *retp,
-		unsigned id, void *args);
-ndx_call_t ndx_call;
-
+/* Internal types - used by ndx_t struct */
+typedef unsigned ndx_areg_t(char *name, ndx_adapter_t *adapter);
+typedef int ndx_call_t(void *retp, unsigned id, void *args);
 typedef int ndx_last_t(void *ret);
-ndx_last_t ndx_last;
-
 typedef unsigned ndx_get_t(char *name);
+
+ndx_areg_t ndx_areg;
+ndx_call_t ndx_call;
+ndx_last_t ndx_last;
 ndx_get_t ndx_get;
 
+/**
+ * @brief Load or reload a module.
+ *
+ * @param fname Path to .so (Linux) or .dll (Windows) file
+ * @return NDX_OK on success, negative error code on failure
+ *
+ * On first load, calls ndx_install() in the module.
+ * On reload, calls ndx_open() if present.
+ */
 typedef int ndx_load_t(char *fname);
 ndx_load_t ndx_load;
 
+/**
+ * @brief Shutdown and unload all modules.
+ *
+ * Calls dlclose() on all loaded module handles.
+ * After this, ndx_load() can be called again.
+ */
 typedef void ndx_shutdown_t(void);
 ndx_shutdown_t ndx_shutdown;
 
+/**
+ * @brief Get last error code.
+ *
+ * @return Last error code from failed API call
+ *
+ * Most API functions set this on failure.
+ */
 typedef int ndx_errno_t(void);
 ndx_errno_t ndx_errno;
 
+/**
+ * @brief Get human-readable error message.
+ *
+ * @param err Error code (e.g., from ndx_errno())
+ * @return Static string describing the error
+ */
 typedef const char *ndx_strerror_t(int err);
 ndx_strerror_t ndx_strerror;
-
-typedef int ndx_depends_t(const char *name);
-ndx_depends_t ndx_depends;
-
-typedef int ndx_load_deps_t(char *fname);
-ndx_load_deps_t ndx_load_deps;
 
 #endif

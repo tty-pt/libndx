@@ -70,13 +70,6 @@ static void build_mod_path(void) {
 int main(void) {
 	printf("test_macros:\n");
 	
-	multi_arg_adapter_reg();
-	struct_hook_adapter_reg();
-	one_arg_adapter_reg();
-	two_args_adapter_reg();
-	four_args_adapter_reg();
-	eight_args_adapter_reg();
-	
 	build_mod_path();
 	
 	test_multi_args();
