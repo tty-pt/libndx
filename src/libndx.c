@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include "../include/ttypt/ndx.h"
 
 #ifdef _WIN32
@@ -46,8 +47,8 @@
 	  }
   }
 #else
-  #include <dlfcn.h>
-  #include <pthread.h>
+#include <dlfcn.h>
+#include <pthread.h>
 
   static pthread_mutex_t ndx_mutex;
   static int ndx_mutex_inited = 0;
@@ -148,7 +149,7 @@ int _mod_run(void *sl, char *symbol) {
 	return NDX_OK;
 }
 
-#if defined(_WIN32)
+#ifdef _WIN32
 #define _RTLD_DEFAULT NULL
 #else
 #define _RTLD_DEFAULT RTLD_DEFAULT
