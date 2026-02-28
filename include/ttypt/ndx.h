@@ -18,7 +18,7 @@
  * 1. Host uses NDX_DEF to define hook signatures
  * 2. Host loads modules via ndx_load()
  * 3. Modules use NDX_DEF to implement hooks they provide
- * 4. Modules implement functions and export get_ndx_ptr()
+ * 4. Modules include ndx-mod.h
  *
  * @section ndx_deps Dependencies
  * Dependencies between modules are handled through the API:

@@ -30,13 +30,12 @@ NDX_DECL(int, on_damage, int, player_id, int, damage);
 
 ## 2. Implement the Hook (Module)
 
-The module must define the implementation and export its `ndx_t` state.
+The module must include `<tty-pt/ndx-mod.h>` and implement the hook.
 
 ```c
 // mods/combat_log.c
+#include <tty-pt/ndx-mod.h>
 #include "common/game_hooks.h"
-
-ndx_t ndx;
 
 // Use NDX_DEF to implement the hook declared in the header
 NDX_DEF(int, on_damage, int, player_id, int, damage) {
@@ -44,9 +43,8 @@ NDX_DEF(int, on_damage, int, player_id, int, damage) {
     return 0; 
 }
 
-// Required boilerplate for the loader
-ndx_t* get_ndx_ptr(void) { return &ndx; }
-void ndx_install(void)   { /* initialization */ }
+// Required: called once on first load
+void ndx_install(void) { /* initialization */ }
 
 ```
 
@@ -96,8 +94,9 @@ int main() {
 
 Every module **must** export:
 
-1. `ndx_t* get_ndx_ptr(void)`: So the host can wire up the dispatch table.
-2. `void ndx_install(void)`: Called once on the very first load.
+1. `void ndx_install(void)`: Called once on the very first load.
+
+> **Note:** Including `<tty-pt/ndx-mod.h>` automatically provides everything needed.
 
 ---
 
