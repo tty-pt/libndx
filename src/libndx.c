@@ -148,6 +148,12 @@ int _mod_run(void *sl, char *symbol) {
 	return NDX_OK;
 }
 
+#if defined(_WIN32)
+#define _RTLD_DEFAULT NULL
+#else
+#define _RTLD_DEFAULT RTLD_DEFAULT
+#endif
+
 int _mod_load(char *fname) {
 	void (*auto_init)(void) = NULL;
 	char *symbol;
@@ -183,7 +189,7 @@ int _mod_load(char *fname) {
 	 * install fails we'll cleanup below. */
 	qmap_put(mod_hd, fname, &sl);
 
-	* (void **) &auto_init = dlsym(RTLD_DEFAULT, "mod_auto_init");
+	* (void **) &auto_init = dlsym(_RTLD_DEFAULT, "mod_auto_init");
 
 	if (auto_init)
 		((mod_cb_t) auto_init)();

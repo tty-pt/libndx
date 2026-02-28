@@ -261,11 +261,7 @@ typedef void (*mod_cb_t)(void);
   #define MODULE_API __attribute__((visibility("default")))
 #endif
 
-#if defined(_WIN32)
-  #define AUTO_INIT __attribute__((section(".ctors")))
-#else
-  #define AUTO_INIT __attribute__((used)) __attribute__((section(".init_array")))
-#endif
+#define AUTO_INIT __attribute__((used)) __attribute__((section(".init_array")))
 
 /**
  * @brief Declare a mod-callable function signature and call stubs.
