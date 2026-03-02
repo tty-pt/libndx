@@ -246,7 +246,7 @@ typedef struct {
 typedef void (*mod_cb_t)(void);
 
 #ifndef __ID_MARKER__
-#define __ID_MARKER__
+#define __ID_MARKER__ static
 #endif
 
 #if defined(_WIN32)
@@ -304,21 +304,16 @@ typedef void (*mod_cb_t)(void);
 		NDX_PG(__VA_ARGS__) \
 	}; \
 	__ID_MARKER__ unsigned fname##_id = NDX_INVALID; \
-	__attribute__((used)) \
-	static void fname##_init_id(void); \
+	static void fname##_init_id(void) { \
+		fname##_id = ndx_get(XSTR(fname)); \
+	} \
 	static inline UNUSED \
 	ftype call_##fname(NDX_FA(__VA_ARGS__)) { \
-		WARN("Calling %s\n", XSTR(fname)); \
 		ftype ret; \
 		memset(&ret, 0, sizeof(ret)); \
 		NDX_CALL(&ret, fname, NDX_DA(__VA_ARGS__)); \
 		return ret; \
-	} \
-	static void fname##_init_id(void) { \
-		fname##_id = ndx_get(XSTR(fname)); \
-	} \
-	AUTO_INIT \
-	void (*fname##_init_id_p)(void) = fname##_init_id
+	}
 
 /**
  * @brief Define a mod-callable function (hook).
@@ -345,6 +340,22 @@ typedef void (*mod_cb_t)(void);
  * @endcode
  */
 #define NDX_DEF(ftype, fname, ...) \
+	typedef ftype fname##_t(NDX_FA(__VA_ARGS__)); \
+	fname##_t fname; \
+	struct fname##_args { \
+		NDX_PG(__VA_ARGS__) \
+	}; \
+	__ID_MARKER__ unsigned fname##_id = NDX_INVALID; \
+	static void fname##_init_id(void) { \
+		fname##_id = ndx_get(XSTR(fname)); \
+	} \
+	static inline UNUSED \
+	ftype call_##fname(NDX_FA(__VA_ARGS__)) { \
+		ftype ret; \
+		memset(&ret, 0, sizeof(ret)); \
+		NDX_CALL(&ret, fname, NDX_DA(__VA_ARGS__)); \
+		return ret; \
+	} \
 	_Static_assert(sizeof(ftype) <= NDX_MAX_RET_SIZE, \
 		"return type too large for ndx_adapter_t"); \
 	fname##_t fname; \

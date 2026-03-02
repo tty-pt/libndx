@@ -156,7 +156,6 @@ int _mod_run(void *sl, char *symbol) {
 #endif
 
 int _mod_load(char *fname) {
-	void (*auto_init)(void) = NULL;
 	char *symbol;
 	void *sl;
 
@@ -193,18 +192,16 @@ int _mod_load(char *fname) {
 	}
 
 	const void *m = qmap_ptr(qmap_get(mod_hd, fname));
-	symbol = m ? "ndx_open" : "ndx_install";
+	if (m)
+		return NDX_OK;
+	/* symbol = m ? "ndx_open" : "ndx_install"; */
+	symbol = "ndx_install";
 
 	WARN("%s: '%s'\n", symbol, fname);
 
 	/* register module early so concurrent ndx_loads see the entry; if
 	 * install fails we'll cleanup below. */
 	qmap_put(mod_hd, fname, &sl);
-
-	* (void **) &auto_init = dlsym(_RTLD_DEFAULT, "mod_auto_init");
-
-	if (auto_init)
-		((mod_cb_t) auto_init)();
 
 	int runret = _mod_run(sl, symbol);
 	/* If symbol was ndx_open and it's missing, that's not an error
@@ -268,8 +265,8 @@ ndx_call(void *retp, unsigned id, void *arg)
 	const ndx_adapter_t *reg = qmap_ptr(qmap_get(sica_hd, &id));
 
 	if (!reg) {
-		WARN("No adapter registered for "
-				"symbol id '%u'\n", id);
+		/* WARN("No adapter registered for " */
+		/* 		"symbol id '%u'\n", id); */
 		NDX_SET_ERR(NDX_ERR_NOTFOUND);
 		NDX_UNLOCK();
 		return NDX_ERR_NOTFOUND;
@@ -318,6 +315,9 @@ ndx_areg(char *name, ndx_adapter_t *adapter)
 		return NDX_INVALID;
 	}
 	NDX_LOCK();
+	const unsigned *existing = qmap_get(sican_hd, name);
+	if (existing)
+	    return *existing;
 	unsigned id = qmap_put(sica_hd, NULL, &adapter);
 	qmap_put(sican_hd, name, &id);
 	/* also update direct map */
