@@ -303,10 +303,6 @@ typedef void (*mod_cb_t)(void);
 	struct fname##_args { \
 		NDX_PG(__VA_ARGS__) \
 	}; \
-	__ID_MARKER__ unsigned fname##_id = NDX_INVALID; \
-	static void fname##_init_id(void) { \
-		fname##_id = ndx_get(XSTR(fname)); \
-	} \
 	static inline UNUSED \
 	ftype call_##fname(NDX_FA(__VA_ARGS__)) { \
 		ftype ret; \
@@ -345,10 +341,6 @@ typedef void (*mod_cb_t)(void);
 	struct fname##_args { \
 		NDX_PG(__VA_ARGS__) \
 	}; \
-	__ID_MARKER__ unsigned fname##_id = NDX_INVALID; \
-	static void fname##_init_id(void) { \
-		fname##_id = ndx_get(XSTR(fname)); \
-	} \
 	static inline UNUSED \
 	ftype call_##fname(NDX_FA(__VA_ARGS__)) { \
 		ftype ret; \
@@ -379,7 +371,7 @@ typedef void (*mod_cb_t)(void);
 		.call = &fname##_adapter_call, \
 	}; \
 	void fname##_adapter_reg(void) { \
-		fname##_id = ndx_areg(XSTR(fname), &fname##_adapter); \
+		ndx_areg(XSTR(fname), &fname##_adapter); \
 	} \
 	AUTO_INIT \
 	void (*fname##_adapter_reg_p)(void) = fname##_adapter_reg; \
@@ -404,25 +396,17 @@ typedef void (*mod_cb_t)(void);
 /* the caller uses this to call */
 #define NDX_CALL(retp, fname, ...) { \
 	struct fname##_args args = { __VA_ARGS__ }; \
-	if (fname##_id == NDX_INVALID) \
-		fname##_init_id(); \
-	if (fname##_id == NDX_INVALID) { \
-		WARN("NDX_CALL BAD %s\n", XSTR(fname)); \
-	} else { \
-		ndx_call(retp, fname##_id, &args); \
-	} \
+	ndx.call(retp, XSTR(fname), &args); \
 }
 
 /* Internal types - used by ndx_t struct */
 typedef unsigned ndx_areg_t(char *name, ndx_adapter_t *adapter);
-typedef int ndx_call_t(void *retp, unsigned id, void *args);
+typedef int ndx_call_t(void *retp, char *name, void *args);
 typedef int ndx_last_t(void *ret);
-typedef unsigned ndx_get_t(char *name);
 
 ndx_areg_t ndx_areg;
 ndx_call_t ndx_call;
 ndx_last_t ndx_last;
-ndx_get_t ndx_get;
 
 /**
  * @brief Load or reload a module.
@@ -463,5 +447,18 @@ ndx_errno_t ndx_errno;
  */
 typedef const char *ndx_strerror_t(int err);
 ndx_strerror_t ndx_strerror;
+
+void ndx_init(void);
+
+struct ndx_ctx {
+	ndx_call_t *call;
+	ndx_areg_t *areg;
+	ndx_load_t *load;
+	ndx_errno_t *err;
+	ndx_strerror_t *strerror;
+	ndx_adapter_t *adapter;
+	ndx_last_t *last;
+	ndx_shutdown_t *shutdown;
+};
 
 #endif

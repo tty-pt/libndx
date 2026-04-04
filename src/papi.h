@@ -6,7 +6,6 @@
 typedef struct {
 	ndx_call_t *call;
 	ndx_areg_t *areg;
-	ndx_get_t *get;
 	ndx_load_t *load;
 	ndx_errno_t *err;
 	ndx_strerror_t *strerror;

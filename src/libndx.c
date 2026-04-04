@@ -93,7 +93,7 @@ enum opts {
 };
 
 unsigned mod_hd,
-	 sica_hd, sican_hd, sican_direct_hd;
+	 sica_hd;
 static uint32_t ndx_ptr_type;
 
 typedef ndx_t* (*get_ndx_func_t)(void);
@@ -155,6 +155,15 @@ int _mod_run(void *sl, char *symbol) {
 #define _RTLD_DEFAULT RTLD_DEFAULT
 #endif
 
+void _ndx_init(void *ptr) {
+	ndx_t *indx = ptr;
+	indx->call = ndx_call;
+	indx->areg = ndx_areg;
+	indx->load = ndx_load;
+	indx->last = ndx_last;
+	indx->shutdown = ndx_shutdown;
+}
+
 int _mod_load(char *fname) {
 	char *symbol;
 	void *sl;
@@ -183,12 +192,7 @@ int _mod_load(char *fname) {
 	* (void **) &get_ndx = dlsym(sl, "get_ndx_ptr");
 	if (get_ndx) {
 		ndx_t *indx = get_ndx();
-		indx->call = ndx_call;
-		indx->areg = ndx_areg;
-		indx->get = ndx_get;
-		indx->load = ndx_load;
-		indx->last = ndx_last;
-		indx->shutdown = ndx_shutdown;
+		_ndx_init(indx);
 	}
 
 	const void *m = qmap_ptr(qmap_get(mod_hd, fname));
@@ -255,14 +259,15 @@ int ndx_last(void *ret) {
 }
 
 int
-ndx_call(void *retp, unsigned id, void *arg)
+ndx_call(void *retp, char *name, void *arg)
 {
 	ndx_init_once();
 	unsigned c;
+	// WARN("name %s\n", name);
 
 	ndx_adapter_t adapter;
 	NDX_LOCK();
-	const ndx_adapter_t *reg = qmap_ptr(qmap_get(sica_hd, &id));
+	const ndx_adapter_t *reg = qmap_ptr(qmap_get(sica_hd, name));
 
 	if (!reg) {
 		/* WARN("No adapter registered for " */
@@ -315,36 +320,15 @@ ndx_areg(char *name, ndx_adapter_t *adapter)
 		return NDX_INVALID;
 	}
 	NDX_LOCK();
-	const unsigned *existing = qmap_get(sican_hd, name);
+	const unsigned *existing = qmap_get(sica_hd, name);
 	if (existing)
 	    return *existing;
-	unsigned id = qmap_put(sica_hd, NULL, &adapter);
-	qmap_put(sican_hd, name, &id);
+	qmap_put(sica_hd, name, &adapter);
 	/* also update direct map */
-	qmap_put(sican_direct_hd, name, &id);
-	fprintf(stderr, "ndx_areg: registered '%s' -> id=%u\n", name, id);
+	fprintf(stderr, "ndx_areg: registered '%s'\n", name);
 	NDX_SET_ERR(NDX_OK);
 	NDX_UNLOCK();
-	return id;
-}
-
-unsigned
-ndx_get(char *name)
-{
-	ndx_init_once();
-	NDX_LOCK();
-    const unsigned *id = qmap_get(sican_hd, name);
-    unsigned ret = id ? *id : NDX_INVALID;
-    if (ret == NDX_INVALID) {
-        const unsigned *d = qmap_get(sican_direct_hd, name);
-        if (d) ret = *d;
-    }
-    /* debug: log lookups (enable by defining NDX_DEBUG) */
-#ifdef NDX_DEBUG
-    fprintf(stderr, "ndx_get: lookup '%s' -> %u\n", name, ret == NDX_INVALID ? (unsigned)NDX_INVALID : ret);
-#endif
-    NDX_UNLOCK();
-    return ret;
+	return 0;
 }
 
 void
@@ -361,7 +345,6 @@ static void
 shared_init(void)
 {
 	ndx.areg = ndx_areg;
-	ndx.get = ndx_get;
 	ndx.call = ndx_call;
 	ndx.load = ndx_load;
 	ndx.err = ndx_errno;
@@ -384,10 +367,7 @@ ndx_init_once(void)
 	if (!ndx_ptr_type)
 		ndx_ptr_type = qmap_reg(sizeof(void *));
 
-	sica_hd = qmap_open(NULL, NULL, QM_HNDL, ndx_ptr_type, SICA_MASK, QM_AINDEX);
-	sican_hd = qmap_open(NULL, NULL, QM_STR, QM_HNDL, SICA_MASK, 0);
-	sican_direct_hd = qmap_open(NULL, NULL, QM_STR, QM_U32, SICA_MASK, 0);
-	qmap_assoc(sican_hd, sica_hd, NULL);
+	sica_hd = qmap_open(NULL, NULL, QM_STR, ndx_ptr_type, SICA_MASK, 0);
 
 	mod_hd = qmap_open(NULL, NULL, QM_STR, ndx_ptr_type, MOD_MASK, 0);
 
@@ -396,9 +376,9 @@ ndx_init_once(void)
 }
 
 #ifndef _WIN32
-__attribute__((constructor)) static void
-ndx_init(void)
+__attribute__((constructor))
+#endif
+  void ndx_init(void)
 {
 	ndx_init_once();
 }
-#endif
