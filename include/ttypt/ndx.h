@@ -100,11 +100,6 @@
 #define NDX_ERR_INIT      -4
 
 /**
- * @brief Error: Lock/mutex operation failed.
- */
-#define NDX_ERR_LOCK      -5
-
-/**
  * @brief Adapter for dispatching hook calls to modules.
  *
  * This struct is used internally to route calls to all modules
