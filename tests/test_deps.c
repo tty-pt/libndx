@@ -1,13 +1,18 @@
 #include <assert.h>
 #include <stdio.h>
 #include <ttypt/ndx.h>
-#include "test_hooks.h"
 
-NDX_DEF(int, get_counter, int, dummy);
-NDX_DEF(int, increment_counter, int, amount);
+NDX_DEF(int, get_counter, int, dummy) {
+	(void)dummy;
+	return 0;
+}
+NDX_DEF(int, increment_counter, int, amount) {
+	(void)amount;
+	return 0;
+}
 
 static void test_load_provider_first(void) {
-    int ret = ndx_load("./tests/mods/mod_dep_provider.so");
+    int ret = ndx_load("./tests/mods/mod_dep_provider");
     assert(ret == NDX_OK);
     
     int count = call_get_counter(0);
@@ -19,7 +24,7 @@ static void test_load_consumer_loads_provider(void) {
     int count_before = call_get_counter(0);
     assert(count_before == 100);
     
-    int ret = ndx_load("./tests/mods/mod_dep_consumer.so");
+    int ret = ndx_load("./tests/mods/mod_dep_consumer");
     assert(ret == NDX_OK);
     
     int count_after = call_get_counter(0);

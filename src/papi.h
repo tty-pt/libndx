@@ -3,17 +3,6 @@
 
 #include "../include/ttypt/ndx.h"
 
-typedef struct {
-	ndx_call_t *call;
-	ndx_areg_t *areg;
-	ndx_load_t *load;
-	ndx_errno_t *err;
-	ndx_strerror_t *strerror;
-	ndx_adapter_t *adapter;
-	ndx_last_t *last;
-	ndx_shutdown_t *shutdown;
-} ndx_t;
-
 extern ndx_t ndx;
 
 #endif

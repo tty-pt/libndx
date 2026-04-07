@@ -3,11 +3,12 @@
 #include <string.h>
 #include <ttypt/ndx.h>
 
-NDX_DECL(int, dummy_hook, int, x);
-NDX_DEF(int, dummy_hook, int, x);
+NDX_DEF(int, dummy_hook, int, x) {
+	return x;
+}
 
 static void test_load_missing(void) {
-	int ret = ndx_load("./tests/nonexistent_mod.so");
+	int ret = ndx_load("./tests/nonexistent_mod");
 	assert(ret == NDX_ERR_NOTFOUND);
 	assert(ndx_errno() == NDX_ERR_NOTFOUND);
 	printf("  test_load_missing: PASS\n");
@@ -16,7 +17,7 @@ static void test_load_missing(void) {
 static void test_call_invalid_id(void) {
 	int result = 0;
 	struct dummy_hook_args args = { .x = 1 };
-	int ret = ndx_call(&result, 999999, &args);
+	int ret = ndx_call(&result, "nonexistent_hook_999999", &args);
 	assert(ret == NDX_ERR_NOTFOUND);
 	assert(ndx_errno() == NDX_ERR_NOTFOUND);
 	printf("  test_call_invalid_id: PASS\n");
@@ -30,7 +31,7 @@ static void test_last_no_call(void) {
 }
 
 static void test_errno_persists(void) {
-	ndx_load("./tests/nonexistent.so");
+	ndx_load("./tests/nonexistent");
 	assert(ndx_errno() == NDX_ERR_NOTFOUND);
 	assert(dummy_hook_id != NDX_INVALID);
 	int result = call_dummy_hook(42);

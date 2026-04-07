@@ -100,6 +100,11 @@
 #define NDX_ERR_INIT      -4
 
 /**
+ * @brief Error: Lock operation failed.
+ */
+#define NDX_ERR_LOCK      -5
+
+/**
  * @brief Adapter for dispatching hook calls to modules.
  *
  * This struct is used internally to route calls to all modules
@@ -345,19 +350,18 @@ typedef void (*mod_cb_t)(void);
 	} \
 	_Static_assert(sizeof(ftype) <= NDX_MAX_RET_SIZE, \
 		"return type too large for ndx_adapter_t"); \
-	fname##_t fname; \
 	void fname##_adapter_call(void *res, void *fn, void *arg) { \
-	fname##_t *cast_fn; \
+		fname##_t *cast_fn; \
 		struct fname##_args args; \
-	memcpy(&args, arg, sizeof(args)); \
-	if (!fn) { \
-		WARN("%s_adapter_call: '%s' wasn't defined\n", \
-				XSTR(fname), XSTR(fname)); \
-		return; \
-	} \
-	* (void **) &cast_fn = fn; \
+		memcpy(&args, arg, sizeof(args)); \
+		if (!fn) { \
+			WARN("%s_adapter_call: '%s' wasn't defined\n", \
+					XSTR(fname), XSTR(fname)); \
+			return; \
+		} \
+		* (void **) &cast_fn = fn; \
 		ftype result = cast_fn(NDX_NA(__VA_ARGS__)); \
-	if (res) memcpy(res, &result, sizeof(ftype)); \
+		if (res) memcpy(res, &result, sizeof(ftype)); \
 	} \
 	ndx_adapter_t fname##_adapter  __attribute__((visibility("default"))) = { \
 		.name = XSTR(fname), \
@@ -365,8 +369,9 @@ typedef void (*mod_cb_t)(void);
 		.ret_size = sizeof(ftype), \
 		.call = &fname##_adapter_call, \
 	}; \
+	static unsigned fname##_id = NDX_INVALID; \
 	void fname##_adapter_reg(void) { \
-		ndx_areg(XSTR(fname), &fname##_adapter); \
+		fname##_id = ndx_areg(XSTR(fname), &fname##_adapter); \
 	} \
 	AUTO_INIT \
 	void (*fname##_adapter_reg_p)(void) = fname##_adapter_reg; \
@@ -391,7 +396,7 @@ typedef void (*mod_cb_t)(void);
 /* the caller uses this to call */
 #define NDX_CALL(retp, fname, ...) { \
 	struct fname##_args args = { __VA_ARGS__ }; \
-	ndx.call(retp, XSTR(fname), &args); \
+	ndx_call(retp, XSTR(fname), &args); \
 }
 
 /* Internal types - used by ndx_t struct */
@@ -451,9 +456,19 @@ struct ndx_ctx {
 	ndx_load_t *load;
 	ndx_errno_t *err;
 	ndx_strerror_t *strerror;
-	ndx_adapter_t *adapter;
 	ndx_last_t *last;
 	ndx_shutdown_t *shutdown;
 };
+
+typedef struct ndx_ctx ndx_t;
+
+/**
+ * @brief Get the registered ID for a hook by name.
+ *
+ * @param name Hook name (e.g., "on_tick")
+ * @return Hook ID on success, NDX_INVALID if not registered
+ */
+typedef unsigned ndx_get_t(char *name);
+ndx_get_t ndx_get;
 
 #endif

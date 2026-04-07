@@ -26,17 +26,25 @@
 
   #define NDX_SET_ERR(e) TlsSetValue(ndx_err_tls, (LPVOID)(intptr_t)(e))
   #define NDX_GET_ERR() ((int)(intptr_t)TlsGetValue(ndx_err_tls))
+  static CRITICAL_SECTION ndx_mutex;
+  #define NDX_LOCK()   EnterCriticalSection(&ndx_mutex)
+  #define NDX_UNLOCK() LeaveCriticalSection(&ndx_mutex)
 #else
 #include <dlfcn.h>
+#include <pthread.h>
 
   static __thread int ndx_err_val;
+  static __thread ndx_adapter_t ndx_last_adapter;
+  static __thread int ndx_last_valid;
+  static pthread_mutex_t ndx_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+  #define NDX_LOCK()   pthread_mutex_lock(&ndx_mutex)
+  #define NDX_UNLOCK() pthread_mutex_unlock(&ndx_mutex)
   #define NDX_SET_ERR(e) (ndx_err_val = (e))
   #define NDX_GET_ERR() (ndx_err_val)
 #endif
 
 #include <string.h>
-#include <stdio.h>
 
 #include <ttypt/qsys.h>
 #include <ttypt/qmap.h>
@@ -77,38 +85,20 @@ const char *ndx_strerror(int err) {
 	case NDX_ERR_INVALID:  return "invalid argument";
 	case NDX_ERR_TOOBIG:   return "return type too large";
 	case NDX_ERR_INIT:     return "initialization failed";
+	case NDX_ERR_LOCK:     return "lock error";
 	default:               return "unknown error";
 	}
 }
 
 static void ndx_exist(void) {
 	ndx_init_once();
+	NDX_LOCK();
 	unsigned c = qmap_iter(mod_hd, NULL, 0);
 	const void *key, *value;
-
 	while (qmap_next(&key, &value, c))
 		dlclose(qmap_ptr(value));
+	NDX_UNLOCK();
 }
-
-int _mod_run(void *sl, char *symbol) {
-	void (*cb)(void) = NULL;
-
-	* (void **) &cb = dlsym(sl, symbol);
-
-	if (!cb) {
-		WARN("couldn't find %s\n", symbol);
-		return NDX_ERR_NOTFOUND;
-	}
-
-	((mod_cb_t) cb)();
-	return NDX_OK;
-}
-
-#ifdef _WIN32
-#define _RTLD_DEFAULT NULL
-#else
-#define _RTLD_DEFAULT RTLD_DEFAULT
-#endif
 
 void _ndx_init(void *ptr) {
 	ndx_t *indx = ptr;
@@ -118,9 +108,7 @@ void _ndx_init(void *ptr) {
 	indx->last = ndx_last;
 	indx->shutdown = ndx_shutdown;
 }
-
 int _mod_load(char *fname) {
-	char *symbol;
 	void *sl;
 
 	#ifdef _WIN32
@@ -134,8 +122,7 @@ int _mod_load(char *fname) {
 	memcpy(buf, fname, flen);
 	memcpy(buf + flen, ext, elen + 1);
 
-	sl = dlopen(buf, RTLD_NOW | RTLD_LOCAL
-			| RTLD_NODELETE);
+	sl = dlopen(buf, RTLD_NOW | RTLD_LOCAL | RTLD_NODELETE);
 
 	if (!sl) {
 		WARN("_mod_load failed loading '%s': %s\n",
@@ -150,32 +137,20 @@ int _mod_load(char *fname) {
 		_ndx_init(indx);
 	}
 
+	NDX_LOCK();
 	const void *m = qmap_ptr(qmap_get(mod_hd, fname));
-	if (m)
+	if (m) {
+		NDX_UNLOCK();
 		return NDX_OK;
-	/* symbol = m ? "ndx_open" : "ndx_install"; */
-	symbol = "ndx_install";
-
-	WARN("%s: '%s'\n", symbol, fname);
-
-	/* register module early so concurrent ndx_loads see the entry; if
-	 * install fails we'll cleanup below. */
-	qmap_put(mod_hd, fname, &sl);
-
-	int runret = _mod_run(sl, symbol);
-	/* If symbol was ndx_open and it's missing, that's not an error
-	 * (module simply doesn't implement optional open hook). Treat
-	 * missing ndx_open as success. */
-	if (runret != NDX_OK) {
-		if (runret == NDX_ERR_NOTFOUND && strcmp(symbol, "ndx_open") == 0) {
-			runret = NDX_OK;
-		} else {
-			/* cleanup on failure */
-			qmap_del(mod_hd, fname);
-			dlclose(sl);
-			return runret;
-		}
 	}
+
+	qmap_put(mod_hd, fname, &sl);
+	NDX_UNLOCK();
+
+	mod_cb_t ndx_install_cb = NULL;
+	* (void **) &ndx_install_cb = dlsym(sl, "ndx_install");
+	if (ndx_install_cb)
+		ndx_install_cb();
 
 	return NDX_OK;
 }
@@ -183,26 +158,23 @@ int _mod_load(char *fname) {
 int ndx_load(char *fname) {
 	ndx_init_once();
 	int ret = _mod_load(fname);
-	if (ret != NDX_OK) {
-		fprintf(stderr, "ndx_load: _mod_load('%s') -> %d (%s)\n", fname, ret, ndx_strerror(ret));
-	}
 	NDX_SET_ERR(ret);
 	return ret;
 }
 
 int ndx_last(void *ret) {
 	ndx_init_once();
-	if (!ndx.adapter) {
+	if (!ndx_last_valid) {
 		NDX_SET_ERR(NDX_ERR_INVALID);
 		return NDX_ERR_INVALID;
 	}
-	if (!ndx.adapter->ran) {
+	if (!ndx_last_adapter.ran) {
 		NDX_SET_ERR(NDX_ERR_NOTFOUND);
 		return NDX_ERR_NOTFOUND;
 	}
 
-	memcpy(ret, ndx.adapter->ret,
-			ndx.adapter->ret_size);
+	memcpy(ret, ndx_last_adapter.ret,
+			ndx_last_adapter.ret_size);
 	NDX_SET_ERR(NDX_OK);
 	return NDX_OK;
 }
@@ -211,47 +183,44 @@ int
 ndx_call(void *retp, char *name, void *arg)
 {
 	ndx_init_once();
-	unsigned c;
-	// WARN("name %s\n", name);
 
-	ndx_adapter_t adapter;
+	NDX_LOCK();
 	const ndx_adapter_t *reg = qmap_ptr(qmap_get(sica_hd, name));
-
 	if (!reg) {
-		/* WARN("No adapter registered for " */
-		/* 		"symbol id '%u'\n", id); */
+		NDX_UNLOCK();
 		NDX_SET_ERR(NDX_ERR_NOTFOUND);
 		return NDX_ERR_NOTFOUND;
 	}
 
 	if (reg->ret_size > NDX_MAX_RET_SIZE) {
+		NDX_UNLOCK();
 		NDX_SET_ERR(NDX_ERR_TOOBIG);
 		return NDX_ERR_TOOBIG;
 	}
 
-	adapter = *reg;
+	ndx_adapter_t adapter = *reg;
 	adapter.ran = 0;
 
-	c = qmap_iter(mod_hd, NULL, 0);
+	/* Snapshot module handles under lock so hooks can be called lock-free */
+	void *handles[512];
+	int nhandles = 0;
+	uint32_t c = qmap_iter(mod_hd, NULL, 0);
 	const void *key, *value;
-	while (qmap_next(&key, &value, c)) {
-		void *handle = qmap_ptr(value);
-		void *cb = dlsym(handle, adapter.name);
+	while (qmap_next(&key, &value, c) &&
+	       nhandles < (int)(sizeof(handles) / sizeof(handles[0])))
+		handles[nhandles++] = qmap_ptr(value);
+	NDX_UNLOCK();
+
+	for (int i = 0; i < nhandles; i++) {
+		void *cb = dlsym(handles[i], adapter.name);
 		if (!cb)
 			continue;
-
-		ndx_t *indx;
-		get_ndx_func_t get_ndx = NULL;
-		* (void **) &get_ndx = dlsym(handle, "get_ndx_ptr");
-		if (!get_ndx)
-			continue;
-		indx = get_ndx();
-		indx->adapter = &adapter;
 		adapter.call(retp, cb, arg);
 		adapter.ran++;
-
 		memcpy(adapter.ret, retp, adapter.ret_size);
 	}
+	ndx_last_adapter = adapter;
+	ndx_last_valid = 1;
 	NDX_SET_ERR(NDX_OK);
 	return NDX_OK;
 }
@@ -264,14 +233,22 @@ ndx_areg(char *name, ndx_adapter_t *adapter)
 		NDX_SET_ERR(NDX_ERR_TOOBIG);
 		return NDX_INVALID;
 	}
-	const unsigned *existing = qmap_get(sica_hd, name);
-	if (existing)
-	    return *existing;
-	qmap_put(sica_hd, name, &adapter);
-	/* also update direct map */
-	fprintf(stderr, "ndx_areg: registered '%s'\n", name);
+	NDX_LOCK();
+	if (!qmap_get(sica_hd, name))
+		qmap_put(sica_hd, name, &adapter);
+	NDX_UNLOCK();
 	NDX_SET_ERR(NDX_OK);
 	return 0;
+}
+
+unsigned
+ndx_get(char *name)
+{
+	ndx_init_once();
+	NDX_LOCK();
+	unsigned found = qmap_get(sica_hd, name) ? 0 : NDX_INVALID;
+	NDX_UNLOCK();
+	return found;
 }
 
 void
@@ -299,6 +276,10 @@ ndx_init_once(void)
 	if (ndx_inited)
 		return;
 	ndx_inited = 1;
+
+#ifdef _WIN32
+	InitializeCriticalSection(&ndx_mutex);
+#endif
 
 	if (!ndx_ptr_type)
 		ndx_ptr_type = qmap_reg(sizeof(void *));

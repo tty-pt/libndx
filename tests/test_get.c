@@ -3,10 +3,8 @@
 #include <string.h>
 #include <ttypt/ndx.h>
 
-NDX_DECL(int, foo_hook, int, x);
-NDX_DEF(int, foo_hook, int, x);
-NDX_DECL(int, bar_hook, int, x);
-NDX_DEF(int, bar_hook, int, x);
+NDX_DEF(int, foo_hook, int, x) { return x; }
+NDX_DEF(int, bar_hook, int, x) { return x; }
 
 static void test_get_valid(void) {
     fprintf(stderr, "  before ndx_get: foo_hook_id = %u\n", foo_hook_id);

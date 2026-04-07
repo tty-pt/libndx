@@ -5,8 +5,9 @@
 
 static char mod_path[256];
 
-NDX_DECL(int, thread_hook, int, val);
-NDX_DEF(int, thread_hook, int, val);
+NDX_DEF(int, thread_hook, int, val) {
+	return val;
+}
 
 static void* load_thread(void *arg) {
 	(void)arg;
@@ -50,14 +51,10 @@ static void test_concurrent_call(void) {
 	printf("  test_concurrent_call: PASS\n");
 }
 
-NDX_DECL(int, t1_hook, int, x);
-NDX_DEF(int, t1_hook, int, x);
-NDX_DECL(int, t2_hook, int, x);
-NDX_DEF(int, t2_hook, int, x);
-NDX_DECL(int, t3_hook, int, x);
-NDX_DEF(int, t3_hook, int, x);
-NDX_DECL(int, t4_hook, int, x);
-NDX_DEF(int, t4_hook, int, x);
+NDX_DEF(int, t1_hook, int, x) { return x; }
+NDX_DEF(int, t2_hook, int, x) { return x; }
+NDX_DEF(int, t3_hook, int, x) { return x; }
+NDX_DEF(int, t4_hook, int, x) { return x; }
 
 static void* areg_thread(void *arg) {
 	int idx = *(int*)arg;
@@ -109,11 +106,7 @@ static void test_concurrent_get(void) {
 }
 
 static void build_mod_path(void) {
-#ifdef _WIN32
-	snprintf(mod_path, sizeof(mod_path), "./tests/mods/mod_basic.dll");
-#else
-	snprintf(mod_path, sizeof(mod_path), "./tests/mods/mod_basic.so");
-#endif
+	snprintf(mod_path, sizeof(mod_path), "./tests/mods/mod_basic");
 }
 
 int main(void) {
