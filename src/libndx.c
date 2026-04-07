@@ -51,8 +51,9 @@
 
 #include "papi.h"
 
-#define MOD_MASK 0x7FFF
-#define SICA_MASK 0x7FFF
+#define MOD_MASK     0x7FFF
+#define SICA_MASK    0x7FFF
+#define NDX_MAX_MODS 512
 
 enum opts {
 	OPT_DETACH = 1,
@@ -201,14 +202,18 @@ ndx_call(void *retp, char *name, void *arg)
 	ndx_adapter_t adapter = *reg;
 	adapter.ran = 0;
 
-	/* Snapshot module handles under lock so hooks can be called lock-free */
-	void *handles[512];
+	/* Snapshot module handles under lock so hooks are called lock-free */
+	void *handles[NDX_MAX_MODS];
 	int nhandles = 0;
 	uint32_t c = qmap_iter(mod_hd, NULL, 0);
 	const void *key, *value;
-	while (qmap_next(&key, &value, c) &&
-	       nhandles < (int)(sizeof(handles) / sizeof(handles[0])))
+	while (qmap_next(&key, &value, c)) {
+		if (nhandles >= NDX_MAX_MODS) {
+			WARN("ndx_call: module limit (%d) reached\n", NDX_MAX_MODS);
+			break;
+		}
 		handles[nhandles++] = qmap_ptr(value);
+	}
 	NDX_UNLOCK();
 
 	for (int i = 0; i < nhandles; i++) {
