@@ -8,9 +8,7 @@
   #define dlclose(handle) FreeLibrary((HMODULE)handle)
   #define dlerror() _win_dlerror()
 
-  static CRITICAL_SECTION ndx_mutex;
   static DWORD ndx_err_tls;
-  static int ndx_mutex_inited;
 
   static char err_buf[256];
   static const char* _win_dlerror(void) {
@@ -26,55 +24,15 @@
 	  return err_buf;
   }
 
-  #define NDX_LOCK() EnterCriticalSection(&ndx_mutex)
-  #define NDX_UNLOCK() LeaveCriticalSection(&ndx_mutex)
   #define NDX_SET_ERR(e) TlsSetValue(ndx_err_tls, (LPVOID)(intptr_t)(e))
   #define NDX_GET_ERR() ((int)(intptr_t)TlsGetValue(ndx_err_tls))
-
-  static void ndx_mutex_init(void) {
-	  if (!ndx_mutex_inited) {
-		  InitializeCriticalSection(&ndx_mutex);
-		  ndx_err_tls = TlsAlloc();
-		  ndx_mutex_inited = 1;
-	  }
-  }
-
-  static void ndx_mutex_destroy(void) {
-	  if (ndx_mutex_inited) {
-		  DeleteCriticalSection(&ndx_mutex);
-		  TlsFree(ndx_err_tls);
-		  ndx_mutex_inited = 0;
-	  }
-  }
 #else
 #include <dlfcn.h>
-#include <pthread.h>
 
-  static pthread_mutex_t ndx_mutex;
-  static int ndx_mutex_inited = 0;
   static __thread int ndx_err_val;
 
-  #define NDX_LOCK() pthread_mutex_lock(&ndx_mutex)
-  #define NDX_UNLOCK() pthread_mutex_unlock(&ndx_mutex)
   #define NDX_SET_ERR(e) (ndx_err_val = (e))
   #define NDX_GET_ERR() (ndx_err_val)
-
-  static void ndx_mutex_init(void) {
-	  if (!ndx_mutex_inited) {
-		  pthread_mutexattr_t attr;
-		  pthread_mutexattr_init(&attr);
-		  pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
-		  pthread_mutex_init(&ndx_mutex, &attr);
-		  pthread_mutexattr_destroy(&attr);
-		  ndx_mutex_inited = 1;
-	  }
-  }
-  static void ndx_mutex_destroy(void) {
-	  if (ndx_mutex_inited) {
-		  pthread_mutex_destroy(&ndx_mutex);
-		  ndx_mutex_inited = 0;
-	  }
-  }
 #endif
 
 #include <string.h>
@@ -119,20 +77,17 @@ const char *ndx_strerror(int err) {
 	case NDX_ERR_INVALID:  return "invalid argument";
 	case NDX_ERR_TOOBIG:   return "return type too large";
 	case NDX_ERR_INIT:     return "initialization failed";
-	case NDX_ERR_LOCK:     return "lock error";
 	default:               return "unknown error";
 	}
 }
 
 static void ndx_exist(void) {
 	ndx_init_once();
-	NDX_LOCK();
 	unsigned c = qmap_iter(mod_hd, NULL, 0);
 	const void *key, *value;
 
 	while (qmap_next(&key, &value, c))
 		dlclose(qmap_ptr(value));
-	NDX_UNLOCK();
 }
 
 int _mod_run(void *sl, char *symbol) {
@@ -227,34 +182,28 @@ int _mod_load(char *fname) {
 
 int ndx_load(char *fname) {
 	ndx_init_once();
-	NDX_LOCK();
 	int ret = _mod_load(fname);
 	if (ret != NDX_OK) {
 		fprintf(stderr, "ndx_load: _mod_load('%s') -> %d (%s)\n", fname, ret, ndx_strerror(ret));
 	}
 	NDX_SET_ERR(ret);
-	NDX_UNLOCK();
 	return ret;
 }
 
 int ndx_last(void *ret) {
 	ndx_init_once();
-	NDX_LOCK();
 	if (!ndx.adapter) {
 		NDX_SET_ERR(NDX_ERR_INVALID);
-		NDX_UNLOCK();
 		return NDX_ERR_INVALID;
 	}
 	if (!ndx.adapter->ran) {
 		NDX_SET_ERR(NDX_ERR_NOTFOUND);
-		NDX_UNLOCK();
 		return NDX_ERR_NOTFOUND;
 	}
 
 	memcpy(ret, ndx.adapter->ret,
 			ndx.adapter->ret_size);
 	NDX_SET_ERR(NDX_OK);
-	NDX_UNLOCK();
 	return NDX_OK;
 }
 
@@ -266,20 +215,17 @@ ndx_call(void *retp, char *name, void *arg)
 	// WARN("name %s\n", name);
 
 	ndx_adapter_t adapter;
-	NDX_LOCK();
 	const ndx_adapter_t *reg = qmap_ptr(qmap_get(sica_hd, name));
 
 	if (!reg) {
 		/* WARN("No adapter registered for " */
 		/* 		"symbol id '%u'\n", id); */
 		NDX_SET_ERR(NDX_ERR_NOTFOUND);
-		NDX_UNLOCK();
 		return NDX_ERR_NOTFOUND;
 	}
 
 	if (reg->ret_size > NDX_MAX_RET_SIZE) {
 		NDX_SET_ERR(NDX_ERR_TOOBIG);
-		NDX_UNLOCK();
 		return NDX_ERR_TOOBIG;
 	}
 
@@ -307,7 +253,6 @@ ndx_call(void *retp, char *name, void *arg)
 		memcpy(adapter.ret, retp, adapter.ret_size);
 	}
 	NDX_SET_ERR(NDX_OK);
-	NDX_UNLOCK();
 	return NDX_OK;
 }
 
@@ -319,7 +264,6 @@ ndx_areg(char *name, ndx_adapter_t *adapter)
 		NDX_SET_ERR(NDX_ERR_TOOBIG);
 		return NDX_INVALID;
 	}
-	NDX_LOCK();
 	const unsigned *existing = qmap_get(sica_hd, name);
 	if (existing)
 	    return *existing;
@@ -327,7 +271,6 @@ ndx_areg(char *name, ndx_adapter_t *adapter)
 	/* also update direct map */
 	fprintf(stderr, "ndx_areg: registered '%s'\n", name);
 	NDX_SET_ERR(NDX_OK);
-	NDX_UNLOCK();
 	return 0;
 }
 
@@ -337,7 +280,6 @@ ndx_shutdown(void)
 #ifndef _WIN32
 	ndx_exist();
 #endif
-	ndx_mutex_destroy();
 	ndx_inited = 0;
 }
 
@@ -356,12 +298,6 @@ ndx_init_once(void)
 {
 	if (ndx_inited)
 		return;
-	ndx_mutex_init();
-	NDX_LOCK();
-	if (ndx_inited) {
-		NDX_UNLOCK();
-		return;
-	}
 	ndx_inited = 1;
 
 	if (!ndx_ptr_type)
@@ -372,7 +308,6 @@ ndx_init_once(void)
 	mod_hd = qmap_open(NULL, NULL, QM_STR, ndx_ptr_type, MOD_MASK, 0);
 
 	shared_init();
-	NDX_UNLOCK();
 }
 
 #ifndef _WIN32
