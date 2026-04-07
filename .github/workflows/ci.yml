@@ -13,6 +13,7 @@ jobs:
       deps: "libqmap"
       deps_pacman_mingw: "mingw-w64-libqmap"
       deps_winget_tty: "libqsys,libqmap"
+      publish_to: "deb,apk,rpm,brew,openbsd"
     secrets:
       HOST: ${{ secrets.OPENBSD_HOST }}
       USER: ${{ secrets.OPENBSD_USER }}
