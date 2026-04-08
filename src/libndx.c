@@ -34,6 +34,7 @@
   #define NDX_GET_ERR() (ndx_err_val)
 #endif
 
+#include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -50,7 +51,8 @@ enum opts {
 };
 
 unsigned mod_hd,
-	 sica_hd;
+	 sica_hd,
+	 pledge_hd;
 static uint32_t ndx_ptr_type;
 
 typedef ndx_t* (*get_ndx_func_t)(void);
@@ -58,6 +60,8 @@ typedef ndx_t* (*get_ndx_func_t)(void);
 ndx_t ndx;
 static volatile int ndx_inited;
 static void ndx_init_once(void);
+
+static __thread const char *ndx_current_caller;
 
 static inline void *
 qmap_ptr(const void *value)
@@ -76,8 +80,29 @@ const char *ndx_strerror(int err) {
 	case NDX_ERR_INVALID:  return "invalid argument";
 	case NDX_ERR_TOOBIG:   return "return type too large";
 	case NDX_ERR_INIT:     return "initialization failed";
+	case NDX_ERR_EPERM:    return "operation not permitted";
 	default:               return "unknown error";
 	}
+}
+
+void ndx_set_caller(const char *module_path) {
+	ndx_current_caller = module_path;
+}
+
+int ndx_pledge(const char *hook_name) {
+	ndx_init_once();
+	const char *caller = ndx_current_caller;
+	if (!caller) {
+		NDX_SET_ERR(NDX_ERR_INVALID);
+		return NDX_ERR_INVALID;
+	}
+	if (qmap_get(pledge_hd, hook_name)) {
+		NDX_SET_ERR(NDX_ERR_EPERM);
+		return NDX_ERR_EPERM;
+	}
+	qmap_put(pledge_hd, hook_name, &caller);
+	NDX_SET_ERR(NDX_OK);
+	return NDX_OK;
 }
 
 static void ndx_exist(void) {
@@ -109,13 +134,16 @@ int _mod_run(void *sl, char *symbol) {
 #define _RTLD_DEFAULT RTLD_DEFAULT
 #endif
 
-void _ndx_init(void *ptr) {
+void _ndx_init(void *ptr, const char *fname) {
 	ndx_t *indx = ptr;
 	indx->call = ndx_call;
 	indx->areg = ndx_areg;
 	indx->load = ndx_load;
 	indx->last = ndx_last;
 	indx->shutdown = ndx_shutdown;
+	indx->module_path = fname;
+	indx->pledge = ndx_pledge;
+	indx->set_caller = ndx_set_caller;
 }
 
 int _mod_load(char *fname) {
@@ -142,13 +170,6 @@ int _mod_load(char *fname) {
 		return NDX_ERR_NOTFOUND;
 	}
 
-	get_ndx_func_t get_ndx = NULL;
-	* (void **) &get_ndx = dlsym(sl, "get_ndx_ptr");
-	if (get_ndx) {
-		ndx_t *indx = get_ndx();
-		_ndx_init(indx);
-	}
-
 	const void *m = qmap_ptr(qmap_get(mod_hd, fname));
 	if (m)
 		return NDX_OK;
@@ -156,16 +177,28 @@ int _mod_load(char *fname) {
 
 	WARN("%s: '%s'\n", symbol, fname);
 
+	/* Duplicate fname so module_path remains valid after the caller's buffer
+	 * is freed (e.g. alloca'd in a parent frame). */
+	char *stable_fname = strdup(fname);
+
 	/* register module early so concurrent ndx_loads see the entry; if
 	 * install fails we'll cleanup below. */
-	qmap_put(mod_hd, fname, &sl);
+	qmap_put(mod_hd, stable_fname, &sl);
+
+	get_ndx_func_t get_ndx = NULL;
+	* (void **) &get_ndx = dlsym(sl, "get_ndx_ptr");
+	if (get_ndx) {
+		ndx_t *indx = get_ndx();
+		_ndx_init(indx, stable_fname);
+	}
 
 	int runret = _mod_run(sl, symbol);
 	if (runret != NDX_OK) {
-    /* cleanup on failure */
-    qmap_del(mod_hd, fname);
-    dlclose(sl);
-    return runret;
+		/* cleanup on failure */
+		qmap_del(mod_hd, stable_fname);
+		free(stable_fname);
+		dlclose(sl);
+		return runret;
 	}
 
 	return NDX_OK;
@@ -174,9 +207,6 @@ int _mod_load(char *fname) {
 int ndx_load(char *fname) {
 	ndx_init_once();
 	int ret = _mod_load(fname);
-	if (ret != NDX_OK) {
-		fprintf(stderr, "ndx_load: _mod_load('%s') -> %d (%s)\n", fname, ret, ndx_strerror(ret));
-	}
 	NDX_SET_ERR(ret);
 	return ret;
 }
@@ -205,12 +235,22 @@ ndx_call(void *retp, char *name, void *arg)
 	unsigned c;
 	// WARN("name %s\n", name);
 
+	/* pledge check: if this hook has been pledged, only the owner may call it */
+	const char *pledge_owner = qmap_ptr(qmap_get(pledge_hd, name));
+	if (pledge_owner) {
+		const char *caller = ndx_current_caller;
+		if (!caller || strcmp(caller, pledge_owner) != 0) {
+			WARN("ndx_call: pledge violation — '%s' called '%s' (owner: '%s')\n",
+				caller ? caller : "(unknown)", name, pledge_owner);
+			NDX_SET_ERR(NDX_ERR_EPERM);
+			return NDX_ERR_EPERM;
+		}
+	}
+
 	ndx_adapter_t adapter;
 	const ndx_adapter_t *reg = qmap_ptr(qmap_get(sica_hd, name));
 
 	if (!reg) {
-		/* WARN("No adapter registered for " */
-		/* 		"symbol id '%u'\n", id); */
 		NDX_SET_ERR(NDX_ERR_NOTFOUND);
 		return NDX_ERR_NOTFOUND;
 	}
@@ -259,8 +299,6 @@ ndx_areg(char *name, ndx_adapter_t *adapter)
 	if (existing)
 	    return *existing;
 	qmap_put(sica_hd, name, &adapter);
-	/* also update direct map */
-	fprintf(stderr, "ndx_areg: registered '%s'\n", name);
 	NDX_SET_ERR(NDX_OK);
 	return 0;
 }
@@ -282,6 +320,8 @@ shared_init(void)
 	ndx.load = ndx_load;
 	ndx.err = ndx_errno;
 	ndx.strerror = ndx_strerror;
+	ndx.pledge = ndx_pledge;
+	ndx.set_caller = ndx_set_caller;
 }
 
 static void
@@ -297,6 +337,8 @@ ndx_init_once(void)
 	sica_hd = qmap_open(NULL, NULL, QM_STR, ndx_ptr_type, SICA_MASK, 0);
 
 	mod_hd = qmap_open(NULL, NULL, QM_STR, ndx_ptr_type, MOD_MASK, 0);
+
+	pledge_hd = qmap_open(NULL, NULL, QM_STR, ndx_ptr_type, MOD_MASK, 0);
 
 	shared_init();
 }

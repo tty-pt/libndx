@@ -3,7 +3,6 @@
 #include <string.h>
 #include <ttypt/ndx.h>
 
-NDX_DECL(int, dummy_hook, int, x);
 NDX_DEF(int, dummy_hook, int, x);
 
 static void test_load_missing(void) {
@@ -16,7 +15,7 @@ static void test_load_missing(void) {
 static void test_call_invalid_id(void) {
 	int result = 0;
 	struct dummy_hook_args args = { .x = 1 };
-	int ret = ndx_call(&result, 999999, &args);
+	int ret = ndx_call(&result, "nonexistent_hook_xyz", &args);
 	assert(ret == NDX_ERR_NOTFOUND);
 	assert(ndx_errno() == NDX_ERR_NOTFOUND);
 	printf("  test_call_invalid_id: PASS\n");
@@ -32,7 +31,7 @@ static void test_last_no_call(void) {
 static void test_errno_persists(void) {
 	ndx_load("./tests/nonexistent.so");
 	assert(ndx_errno() == NDX_ERR_NOTFOUND);
-	assert(dummy_hook_id != NDX_INVALID);
+	assert(dummy_hook_adapter.name[0] != '\0');
 	int result = call_dummy_hook(42);
 	(void)result;
 	assert(ndx_errno() == NDX_OK);

@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <ttypt/ndx.h>
 
-NDX_DECL(int, init_order_check, int, dummy);
 NDX_DEF(int, init_order_check, int, dummy);
 
 int init_order_check(int dummy) {
@@ -10,7 +9,7 @@ int init_order_check(int dummy) {
 }
 
 static void test_auto_init_runs_before_install(void) {
-    int ret = ndx_load("./tests/mods/mod_auto.so");
+    int ret = ndx_load("./tests/mods/mod_auto");
     assert(ret == NDX_OK);
     
     printf("  test_auto_init_runs_before_install: PASS\n");

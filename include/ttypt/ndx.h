@@ -100,6 +100,11 @@
 #define NDX_ERR_INIT      -4
 
 /**
+ * @brief Error: Operation not permitted (pledge violation).
+ */
+#define NDX_ERR_EPERM     -5
+
+/**
  * @brief Adapter for dispatching hook calls to modules.
  *
  * This struct is used internally to route calls to all modules
@@ -391,17 +396,36 @@ typedef void (*mod_cb_t)(void);
 /* the caller uses this to call */
 #define NDX_CALL(retp, fname, ...) { \
 	struct fname##_args args = { __VA_ARGS__ }; \
-	ndx.call(retp, XSTR(fname), &args); \
+	ndx_set_caller(__ndx_caller_path__); \
+	ndx_call(retp, XSTR(fname), &args); \
 }
 
 /* Internal types - used by ndx_t struct */
 typedef unsigned ndx_areg_t(char *name, ndx_adapter_t *adapter);
 typedef int ndx_call_t(void *retp, char *name, void *args);
 typedef int ndx_last_t(void *ret);
+typedef void ndx_set_caller_t(const char *module_path);
+
+/**
+ * @brief Pledge exclusive call rights to a hook.
+ *
+ * Called by a module (via ndx.pledge) to declare that only this module
+ * may call the named hook. The first caller wins; any subsequent call to
+ * ndx_pledge for the same hook name returns NDX_ERR_EPERM.
+ *
+ * After a pledge is recorded, any other module invoking the pledged hook
+ * via ndx_call will receive NDX_ERR_EPERM.
+ *
+ * @param hook_name Name of the hook to restrict (e.g., "get_counter")
+ * @return NDX_OK on success, NDX_ERR_EPERM if already pledged,
+ *         NDX_ERR_INVALID if caller identity is unavailable
+ */
+typedef int ndx_pledge_t(const char *hook_name);
 
 ndx_areg_t ndx_areg;
 ndx_call_t ndx_call;
 ndx_last_t ndx_last;
+ndx_pledge_t ndx_pledge;
 
 /**
  * @brief Load or reload a module.
@@ -445,6 +469,23 @@ ndx_strerror_t ndx_strerror;
 
 void ndx_init(void);
 
+/**
+ * @brief Set the current caller identity for pledge enforcement.
+ *
+ * Called automatically by the NDX_CALL macro. Not intended for direct use.
+ */
+ndx_set_caller_t ndx_set_caller;
+
+/**
+ * @brief Per-translation-unit caller path for pledge enforcement.
+ *
+ * Defaults to NULL (unrestricted). Overridden in ndx-mod.h for module TUs.
+ * The NDX_CALL macro passes this to ndx_set_caller before each dispatch.
+ */
+#ifndef __NDX_CALLER_PATH_DEFINED__
+static UNUSED const char *__ndx_caller_path__ = NULL;
+#endif
+
 struct ndx_ctx {
 	ndx_call_t *call;
 	ndx_areg_t *areg;
@@ -454,6 +495,12 @@ struct ndx_ctx {
 	ndx_adapter_t *adapter;
 	ndx_last_t *last;
 	ndx_shutdown_t *shutdown;
+	/** @brief Path this module was loaded from; set by host, read-only to module */
+	const char *module_path;
+	/** @brief Pledge exclusive call rights to a hook (see ndx_pledge) */
+	ndx_pledge_t *pledge;
+	/** @brief Internal: set caller identity before dispatch */
+	ndx_set_caller_t *set_caller;
 };
 
 #endif

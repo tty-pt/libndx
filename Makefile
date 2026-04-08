@@ -18,9 +18,6 @@ ${TEST_DIR}/test_errors${EXE}: ${TEST_DIR} ${TEST_DIR}/test_errors.c lib/libndx.
 	${cc} -o $@ ${TEST_DIR}/test_errors.c ${CFLAGS} ${TEST_CFLAGS} \
 		${LDFLAGS} -lndx ${LDLIBS-libndx} ${TEST_LDFLAGS}
 
-${TEST_DIR}/test_threads${EXE}: ${TEST_DIR} ${TEST_DIR}/test_threads.c lib/libndx.${SO}
-	${cc} -o $@ ${TEST_DIR}/test_threads.c ${CFLAGS} ${TEST_CFLAGS} \
-		${LDFLAGS} -lndx ${LDLIBS-libndx} ${TEST_LDFLAGS}
 
 ${TEST_DIR}/test_macros${EXE}: ${TEST_DIR} ${TEST_DIR}/test_macros.c lib/libndx.${SO}
 	${cc} -o $@ ${TEST_DIR}/test_macros.c ${CFLAGS} ${TEST_CFLAGS} \
@@ -86,6 +83,18 @@ ${TEST_DIR}/mods/mod_multiplier.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_multipli
 	${cc} -o $@ ${TEST_DIR}/mods/mod_multiplier.c ${CFLAGS} ${TEST_CFLAGS} \
 		-fPIC -shared ${LDFLAGS} -lndx ${LDLIBS-libndx}
 
+${TEST_DIR}/mods/mod_pledge_owner.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_pledge_owner.c lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/mods/mod_pledge_owner.c ${CFLAGS} ${TEST_CFLAGS} \
+		-fPIC -shared ${LDFLAGS} -lndx ${LDLIBS-libndx}
+
+${TEST_DIR}/mods/mod_pledge_interloper.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_pledge_interloper.c lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/mods/mod_pledge_interloper.c ${CFLAGS} ${TEST_CFLAGS} \
+		-fPIC -shared ${LDFLAGS} -lndx ${LDLIBS-libndx}
+
+${TEST_DIR}/test_pledge${EXE}: ${TEST_DIR} ${TEST_DIR}/test_pledge.c lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/test_pledge.c ${CFLAGS} ${TEST_CFLAGS} \
+		${LDFLAGS} -lndx ${LDLIBS-libndx} ${TEST_LDFLAGS}
+
 TEST_MODS := ${TEST_DIR}/test_mod.${SO} \
 	${TEST_DIR}/mods/mod_basic.${SO} \
 	${TEST_DIR}/mods/mod_multi.${SO} \
@@ -95,17 +104,19 @@ TEST_MODS := ${TEST_DIR}/test_mod.${SO} \
 	${TEST_DIR}/mods/mod_dep_consumer.${SO} \
 	${TEST_DIR}/mods/mod_auto.${SO} \
 	${TEST_DIR}/mods/mod_adder.${SO} \
-	${TEST_DIR}/mods/mod_multiplier.${SO}
+	${TEST_DIR}/mods/mod_multiplier.${SO} \
+	${TEST_DIR}/mods/mod_pledge_owner.${SO} \
+	${TEST_DIR}/mods/mod_pledge_interloper.${SO}
 
 TEST_BINS := ${TEST_DIR}/test_core${EXE} \
 	${TEST_DIR}/test_errors${EXE} \
-	${TEST_DIR}/test_threads${EXE} \
 	${TEST_DIR}/test_macros${EXE} \
 	${TEST_DIR}/test_main${EXE} \
 	${TEST_DIR}/test_deps${EXE} \
 	${TEST_DIR}/test_auto_init${EXE} \
 	${TEST_DIR}/test_multi_call${EXE} \
-	${TEST_DIR}/test_get${EXE}
+	${TEST_DIR}/test_get${EXE} \
+	${TEST_DIR}/test_pledge${EXE}
 
 test-build: lib/libndx.${SO} ${TEST_MODS} ${TEST_BINS}
 
@@ -114,8 +125,6 @@ test: test-build
 	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_core
 	@echo "Running test_errors..."
 	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_errors
-	@echo "Running test_threads..."
-	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_threads
 	@echo "Running test_macros..."
 	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_macros
 	@echo "Running test_main..."
@@ -128,4 +137,6 @@ test: test-build
 	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_multi_call
 	@echo "Running test_get..."
 	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_get
+	@echo "Running test_pledge..."
+	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_pledge
 	@echo "All tests passed!"

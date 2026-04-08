@@ -5,7 +5,6 @@
 
 static char mod_path[256];
 
-NDX_DECL(int, multi_arg, int, a, int, b, int, c, int, d, int, e, int, f, int, g, int, h);
 NDX_DEF(int, multi_arg, int, a, int, b, int, c, int, d, int, e, int, f, int, g, int, h);
 
 static void test_multi_args(void) {
@@ -22,7 +21,6 @@ typedef struct {
 	int y;
 } point_t;
 
-NDX_DECL(point_t, struct_hook, int, x, int, y);
 NDX_DEF(point_t, struct_hook, int, x, int, y);
 
 static void test_struct_return(void) {
@@ -35,13 +33,9 @@ static void test_struct_return(void) {
 	printf("  test_struct_return: PASS\n");
 }
 
-NDX_DECL(int, one_arg, int, a);
 NDX_DEF(int, one_arg, int, a);
-NDX_DECL(int, two_args, int, a, int, b);
 NDX_DEF(int, two_args, int, a, int, b);
-NDX_DECL(int, four_args, int, a, int, b, int, c, int, d);
 NDX_DEF(int, four_args, int, a, int, b, int, c, int, d);
-NDX_DECL(int, eight_args, int, a, int, b, int, c, int, d, int, e, int, f, int, g, int, h);
 NDX_DEF(int, eight_args, int, a, int, b, int, c, int, d, int, e, int, f, int, g, int, h);
 
 static void test_arg_counts(void) {
@@ -60,11 +54,7 @@ static void test_adapter_name(void) {
 }
 
 static void build_mod_path(void) {
-#ifdef _WIN32
-	snprintf(mod_path, sizeof(mod_path), "./tests/mods/mod_multi.dll");
-#else
-	snprintf(mod_path, sizeof(mod_path), "./tests/mods/mod_multi.so");
-#endif
+	snprintf(mod_path, sizeof(mod_path), "./tests/mods/mod_multi");
 }
 
 int main(void) {

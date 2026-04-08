@@ -3,11 +3,10 @@
 #include <string.h>
 #include <ttypt/ndx.h>
 
-NDX_DECL(int, test_hook, int, a, int, b);
 NDX_DEF(int, test_hook, int, a, int, b);
 
 static void test_adapter_reg_sets_id(void) {
-	assert(test_hook_id != NDX_INVALID);
+	assert(test_hook_adapter.name[0] != '\0');
 	printf("  test_adapter_reg_sets_id: PASS\n");
 }
 

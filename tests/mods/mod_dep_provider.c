@@ -1,22 +1,20 @@
-#include <ttypt/ndx.h>
-#include "../../src/papi.h"
-
-ndx_t ndx;
+#include <ttypt/ndx-mod.h>
 
 static int counter = 100;
 
-MODULE_API int get_counter(void) {
-    return counter;
+NDX_DEF(int, get_counter, int, dummy)
+{
+	(void)dummy;
+	return counter;
 }
 
-MODULE_API void increment_counter(int amount) {
-    counter += amount;
+NDX_DEF(int, increment_counter, int, amount)
+{
+	counter += amount;
+	return 0;
 }
 
-MODULE_API void ndx_install(void) {
-    counter = 100;
-}
-
-MODULE_API ndx_t* get_ndx_ptr(void) {
-    return &ndx;
+MODULE_API void ndx_install(void)
+{
+	counter = 100;
 }

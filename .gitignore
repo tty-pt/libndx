@@ -1,6 +1,8 @@
 /lib
 /bin
-/tests/test_main
+/tests
+!/tests/**/*.c
+!/tests/**/*.h
 /man
 *.so
 *.o

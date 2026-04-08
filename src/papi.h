@@ -12,6 +12,9 @@ typedef struct {
 	ndx_adapter_t *adapter;
 	ndx_last_t *last;
 	ndx_shutdown_t *shutdown;
+	const char *module_path;
+	ndx_pledge_t *pledge;
+	ndx_set_caller_t *set_caller;
 } ndx_t;
 
 extern ndx_t ndx;
