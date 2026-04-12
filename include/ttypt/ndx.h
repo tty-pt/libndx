@@ -58,13 +58,6 @@
 #define NDX_MAX_RET_SIZE 4096
 
 /**
- * @brief Weak symbol attribute for function declarations.
- *
- * Used in NDX_DECL to allow function to be optionally defined.
- */
-#define WEAK __attribute__((weak))
-
-/**
  * @brief Invalid hook ID returned when lookup fails.
  */
 #define NDX_INVALID ((unsigned) -1)
