@@ -9,8 +9,12 @@ NDX_DEF(int, thread_hook, int, val);
 
 static void* load_thread(void *arg) {
 	(void)arg;
+	/* ndx_load is not thread-safe; serialize via a per-thread mutex */
+	static pthread_mutex_t load_mu = PTHREAD_MUTEX_INITIALIZER;
 	for (int i = 0; i < 50; i++) {
+		pthread_mutex_lock(&load_mu);
 		int ret = ndx_load(mod_path);
+		pthread_mutex_unlock(&load_mu);
 		assert(ret == NDX_OK);
 	}
 	return NULL;
@@ -56,12 +60,15 @@ NDX_DEF(int, t4_hook, int, x);
 
 static void* areg_thread(void *arg) {
 	int idx = *(int*)arg;
+	static pthread_mutex_t areg_mu = PTHREAD_MUTEX_INITIALIZER;
+	pthread_mutex_lock(&areg_mu);
 	switch (idx) {
 		case 0: t1_hook_adapter_reg(); break;
 		case 1: t2_hook_adapter_reg(); break;
 		case 2: t3_hook_adapter_reg(); break;
 		case 3: t4_hook_adapter_reg(); break;
 	}
+	pthread_mutex_unlock(&areg_mu);
 	return NULL;
 }
 

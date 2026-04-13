@@ -46,6 +46,7 @@
  */
 
 #include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 #include <ttypt/qsys.h>
 
@@ -83,7 +84,7 @@
 #define NDX_ERR_INVALID   -2
 
 /**
- * @brief Error: Return type exceeds NDX_MAX_RET_SIZE.
+ * @brief Error: Return type exceeds NDX_MAX_RET_SIZE / no slot available.
  */
 #define NDX_ERR_TOOBIG    -3
 
@@ -93,7 +94,7 @@
 #define NDX_ERR_INIT      -4
 
 /**
- * @brief Error: Operation not permitted (pledge violation).
+ * @brief Error: Operation not permitted (pledge or claim violation).
  */
 #define NDX_ERR_EPERM     -5
 
@@ -371,9 +372,10 @@ typedef void (*mod_cb_t)(void);
 	ftype fname(NDX_FA(__VA_ARGS__))
 
 /**
- * @brief Call a mod hook by name, using its hook id.
+ * @brief Call a mod hook by name within the current thread-local region.
  *
- * This macro calls all modules that implement the named hook.
+ * This macro calls all modules that implement the named hook whose region
+ * is a descendant-or-equal of the caller's current region.
  * The return value is from the last module that ran.
  *
  * @param retp Pointer to store return value
@@ -400,14 +402,15 @@ typedef int ndx_last_t(void *ret);
 typedef void ndx_set_caller_t(const char *module_path);
 
 /**
- * @brief Pledge exclusive call rights to a hook.
+ * @brief Pledge exclusive call rights to a hook, scoped to the caller's region.
  *
- * Called by a module (via ndx.pledge) to declare that only this module
- * may call the named hook. The first caller wins; any subsequent call to
- * ndx_pledge for the same hook name returns NDX_ERR_EPERM.
+ * In module context the pledge is scoped to the module's assigned region.
+ * In host context (caller == NULL / root) the pledge is root-scoped (global).
  *
- * After a pledge is recorded, any other module invoking the pledged hook
- * via ndx_call will receive NDX_ERR_EPERM.
+ * The first caller wins; any subsequent ndx_pledge for the same hook in the
+ * same region returns NDX_ERR_EPERM.  After a pledge is recorded, any other
+ * caller invoking the pledged hook via ndx_call in that region will receive
+ * NDX_ERR_EPERM.
  *
  * @param hook_name Name of the hook to restrict (e.g., "get_counter")
  * @return NDX_OK on success, NDX_ERR_EPERM if already pledged,
@@ -415,19 +418,140 @@ typedef void ndx_set_caller_t(const char *module_path);
  */
 typedef int ndx_pledge_t(const char *hook_name);
 
-ndx_areg_t ndx_areg;
-ndx_call_t ndx_call;
-ndx_last_t ndx_last;
-ndx_pledge_t ndx_pledge;
+/* -------------------------------------------------------------------------
+ * Region API types
+ * ------------------------------------------------------------------------- */
+
+/** Root region — ancestor of all regions.  Passing this to ndx_call
+ *  dispatches to every module regardless of its region. */
+#define NDX_REGION_ROOT ((uint64_t)0)
+
+/** Sentinel returned when region allocation fails. */
+#define NDX_REGION_INVALID ((uint64_t)-1)
 
 /**
- * @brief Load or reload a module.
+ * @brief Deny target (hook name or module path) selector.
+ */
+typedef enum {
+	NDX_DENY_HOOK   = 0, /**< @p what is a hook name */
+	NDX_DENY_MODULE = 1, /**< @p what is a module path */
+} ndx_deny_type_t;
+
+/**
+ * @brief Deny a hook or module within the caller's current region.
  *
- * @param fname Path to .so (Linux) or .dll (Windows) file
+ * The deny applies to sub-regions only (children-only semantics by default).
+ * A module's own region is never blocked by its own deny.
+ *
+ * @param what  Hook name (NDX_DENY_HOOK) or module path (NDX_DENY_MODULE).
+ * @param type  NDX_DENY_HOOK or NDX_DENY_MODULE.
+ * @return NDX_OK or a negative NDX_ERR_* code.
+ */
+typedef int ndx_deny_t(const char *what, ndx_deny_type_t type);
+
+/**
+ * @brief Interceptor function type (middleware pattern).
+ *
+ * @param hook    Name of the hook being dispatched
+ * @param args    Packed argument struct (cast to the hook's args type)
+ * @param ret     Return-value buffer (cast to the hook's return type)
+ * @param next    Call this to continue the chain; skip it to block
+ * @param next_ud Opaque pointer to pass verbatim to @p next (do not modify)
+ * @param ud      User-supplied data from ndx_intercept()
+ * @return NDX_OK, or a negative error code to signal failure upstream
+ */
+typedef void (*ndx_call_fn_t)(void *args, void *ret, void *ud);
+typedef int ndx_interceptor_fn_t(
+	const char *hook, void *args, void *ret,
+	ndx_call_fn_t next, void *next_ud, void *ud);
+
+/**
+ * @brief Register a middleware interceptor for @p hook_name in the caller's
+ * current region.
+ *
+ * Interceptors are called outermost-first (root → target region).  Each
+ * interceptor may inspect/modify args and ret, call @p next to continue, or
+ * return early to block.
+ */
+typedef int ndx_intercept_t(const char *hook_name,
+                             ndx_interceptor_fn_t *fn, void *ud);
+
+/**
+ * @brief Claim handler type.
+ *
+ * @param module_path    Path of the child module making the request (read-only)
+ * @param requested_bits Number of bits the child asked for
+ * @param granted_bits   Out-param: set to the approved width
+ * @param ud             User data from ndx_on_claim()
+ * @return NDX_OK to approve (with *granted_bits set), NDX_ERR_EPERM to reject.
+ */
+typedef int ndx_claim_handler_fn_t(const char *module_path,
+                                    uint8_t     requested_bits,
+                                    uint8_t    *granted_bits,
+                                    void       *ud);
+
+/**
+ * @brief Claim a sub-region of @p bits width under the caller's current region.
+ *
+ * Only valid inside ndx_install().
+ * The parent region's claim handler (if any) is invoked first; it may approve,
+ * reduce the granted width, or reject.
+ *
+ * On success the module's assigned region becomes the new child region.
+ * Subsequent ndx_deny, ndx_intercept, ndx_pledge, ndx_load, and ndx_on_claim
+ * calls from this module all operate on the child region.
+ *
+ * @param bits  Requested child region width in bits (1–64).
+ * @return NDX_OK on success, NDX_ERR_EPERM if rejected, NDX_ERR_TOOBIG if
+ *         no free slot of the requested width exists.
+ */
+typedef int ndx_claim_t(uint8_t bits);
+
+/**
+ * @brief Register a claim handler on the caller's current region.
+ *
+ * When any module loaded into this region calls ndx_claim(), this handler is
+ * invoked before the claim is processed.  Only one handler per region; a
+ * second call replaces the first.  Without a handler, ndx_claim always fails
+ * with NDX_ERR_EPERM.
+ *
+ * @param fn  Claim handler function.
+ * @param ud  User data passed to fn.
+ * @return NDX_OK or negative NDX_ERR_* code.
+ */
+typedef int ndx_on_claim_t(ndx_claim_handler_fn_t *fn, void *ud);
+
+/**
+ * @brief Enumerate immediate child regions of the caller's current region.
+ *
+ * Calls @p fn(child_id, ud) for each child in allocation order.
+ * child_id is an opaque uint64_t region identifier.
+ *
+ * Return NDX_OK from @p fn to continue, any other value to stop.
+ * ndx_region_each returns the last value returned by @p fn, or NDX_OK if
+ * there were no children.
+ */
+typedef int ndx_region_each_fn_t(uint64_t child_id, void *ud);
+typedef int ndx_region_each_t(ndx_region_each_fn_t *fn, void *ud);
+
+ndx_areg_t   ndx_areg;
+ndx_call_t   ndx_call;
+ndx_last_t   ndx_last;
+ndx_pledge_t ndx_pledge;
+ndx_deny_t           ndx_deny;
+ndx_intercept_t      ndx_intercept;
+ndx_claim_t          ndx_claim;
+ndx_on_claim_t       ndx_on_claim;
+ndx_region_each_t    ndx_region_each;
+
+/**
+ * @brief Load or reload a module into the caller's current region.
+ *
+ * @param fname     Path to .so (Linux) or .dll (Windows) file
  * @return NDX_OK on success, negative error code on failure
  *
- * On first load, calls ndx_install()
- * it doesn't if it is already loaded.
+ * On first load, calls ndx_install().
+ * Subsequent loads of the same path into the same region are no-ops.
  */
 typedef int ndx_load_t(char *fname);
 ndx_load_t ndx_load;
@@ -472,7 +596,7 @@ ndx_set_caller_t ndx_set_caller;
 /**
  * @brief Per-translation-unit caller path for pledge enforcement.
  *
- * Defaults to NULL (unrestricted). Overridden in ndx-mod.h for module TUs.
+ * Defaults to NULL (unrestricted host context). Overridden in ndx-mod.h.
  * The NDX_CALL macro passes this to ndx_set_caller before each dispatch.
  */
 #ifndef __NDX_CALLER_PATH_DEFINED__
@@ -480,20 +604,27 @@ static UNUSED const char *__ndx_caller_path__ = NULL;
 #endif
 
 struct ndx_ctx {
-	ndx_call_t *call;
-	ndx_areg_t *areg;
-	ndx_load_t *load;
-	ndx_errno_t *err;
-	ndx_strerror_t *strerror;
-	ndx_adapter_t *adapter;
-	ndx_last_t *last;
-	ndx_shutdown_t *shutdown;
+	ndx_call_t       *call;
+	ndx_areg_t       *areg;
+	ndx_load_t       *load;
+	ndx_errno_t      *err;
+	ndx_strerror_t   *strerror;
+	ndx_adapter_t    *adapter;
+	ndx_last_t       *last;
+	ndx_shutdown_t   *shutdown;
 	/** @brief Path this module was loaded from; set by host, read-only to module */
-	const char *module_path;
-	/** @brief Pledge exclusive call rights to a hook (see ndx_pledge) */
-	ndx_pledge_t *pledge;
+	const char       *module_path;
+	/** @brief Pledge exclusive call rights to a hook (scoped to caller's region) */
+	ndx_pledge_t     *pledge;
 	/** @brief Internal: set caller identity before dispatch */
 	ndx_set_caller_t *set_caller;
+	/** @brief Region ID assigned to this module at load time */
+	uint64_t          region_id;
+	/* region management API */
+	ndx_deny_t            *deny;
+	ndx_intercept_t       *intercept;
+	ndx_claim_t           *claim;
+	ndx_on_claim_t        *on_claim;
+	ndx_region_each_t     *region_each;
 };
-
 #endif
