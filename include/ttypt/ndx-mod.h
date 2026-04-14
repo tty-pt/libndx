@@ -23,12 +23,8 @@ get_ndx_ptr(void)
 #undef NDX_CALL
 #define NDX_CALL(retp, fname, ...) { \
 	struct fname##_args args = { __VA_ARGS__ }; \
-	ndx.set_caller(ndx.module_path); \
-	ndx.call(retp, XSTR(fname), &args); \
+	ndx.call(retp, &fname##_adapter, &args, ndx.module_path); \
 }
-
-/* Module-context __ndx_caller_path__ for any macro that needs it */
-static UNUSED const char *__ndx_caller_path__ = NULL; /* unused in mod ctx */
 
 /**
  * @brief Load a module into the caller's current region.
@@ -64,7 +60,7 @@ ndx_mod_pledge_(struct ndx_ctx *_n, const char *h)
 /**
  * @brief Deny a hook or module within the caller's current region.
  *
- * The deny applies to sub-regions (children-only semantics).
+ * The deny applies to the caller's current region and all its descendants.
  *
  * @param what       Hook name (NDX_DENY_HOOK) or module path (NDX_DENY_MODULE)
  * @param type       NDX_DENY_HOOK or NDX_DENY_MODULE
@@ -91,30 +87,20 @@ ndx_mod_intercept_(struct ndx_ctx *_n, const char *h,
 { _n->set_caller(_n->module_path); return _n->intercept(h, fn, ud); }
 
 /**
- * @brief Claim a sub-region of @p bits width under the caller's current region.
+ * @brief Set or clear the claim gate on the caller's current region.
  *
- * Only valid inside ndx_install().
- * The parent region's claim handler (if any) is invoked first.
+ * Non-NULL fn: enables the gate — subsequent ndx_load() calls require an
+ * ndx_claim symbol from the module.
+ * NULL fn: clears the gate — subsequent ndx_load() calls need no ndx_claim.
  *
- * @param bits  Requested child region width in bits (1-58).
+ * @param fn  Claim handler function, or NULL to clear.
+ * @param ud  User data passed to fn (ignored when fn is NULL).
  */
-#define ndx_claim(bits) \
-	ndx_mod_claim_(&ndx, (bits))
+#define ndx_require_claim(fn, ud) \
+	ndx_mod_require_claim_(&ndx, (fn), (ud))
 static inline UNUSED int
-ndx_mod_claim_(struct ndx_ctx *_n, uint8_t bits)
-{ _n->set_caller(_n->module_path); return _n->claim(bits); }
-
-/**
- * @brief Register a claim handler on the caller's current region.
- *
- * @param fn  Claim handler function
- * @param ud  User data passed to fn
- */
-#define ndx_on_claim(fn, ud) \
-	ndx_mod_on_claim_(&ndx, (fn), (ud))
-static inline UNUSED int
-ndx_mod_on_claim_(struct ndx_ctx *_n, ndx_claim_handler_fn_t *fn, void *ud)
-{ _n->set_caller(_n->module_path); return _n->on_claim(fn, ud); }
+ndx_mod_require_claim_(struct ndx_ctx *_n, ndx_claim_handler_fn_t *fn, void *ud)
+{ _n->set_caller(_n->module_path); return _n->require_claim(fn, ud); }
 
 /**
  * @brief Enumerate immediate child regions of the caller's current region.

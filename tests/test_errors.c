@@ -15,7 +15,7 @@ static void test_load_missing(void) {
 static void test_call_invalid_id(void) {
 	int result = 0;
 	struct dummy_hook_args args = { .x = 1 };
-	int ret = ndx_call(&result, "nonexistent_hook_xyz", &args);
+	int ret = ndx_call(&result, NULL, &args, NULL);
 	assert(ret == NDX_ERR_NOTFOUND);
 	assert(ndx_errno() == NDX_ERR_NOTFOUND);
 	printf("  test_call_invalid_id: PASS\n");

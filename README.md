@@ -262,7 +262,7 @@ void ndx_install(void)
 
 #### `int ndx_deny(const char *what, ndx_deny_type_t type)`
 
-Block a hook or module within the caller's current region and all its descendants. The denial does not affect the caller's own region — it applies to sub-regions only.
+Block a hook or module within the caller's current region and all its descendants. The denial applies to the caller's own region as well — any call dispatched from within the denying region (or any descendant) is affected.
 
 `type` is one of:
 
@@ -272,10 +272,10 @@ Block a hook or module within the caller's current region and all its descendant
 | `NDX_DENY_MODULE` | `what` is a module path |
 
 ```c
-// Prevent any module in sub-regions from calling "dangerous_hook"
+// Prevent any module in this region or sub-regions from calling "dangerous_hook"
 ndx_deny("dangerous_hook", NDX_DENY_HOOK);
 
-// Prevent a specific module from running in sub-regions
+// Prevent a specific module from running in this region or sub-regions
 ndx_deny("mods/untrusted", NDX_DENY_MODULE);
 ```
 

@@ -117,6 +117,10 @@ typedef struct {
 	/** @brief Internal call dispatcher */
 	void (*call)(void *, void *, void *);
 
+	/** @brief Monotonic hook ID assigned by ndx_areg(); used for O(1) dispatch.
+	 *  Zero-initialised by NDX_DEF; filled in by ndx_areg() on first registration. */
+	int hook_id;
+
 	/** @brief Buffer for last return value */
 	char ret[NDX_MAX_RET_SIZE];
 
@@ -297,6 +301,12 @@ typedef void (*mod_cb_t)(void);
 	struct fname##_args { \
 		NDX_PG(__VA_ARGS__) \
 	}; \
+	static ndx_adapter_t fname##_adapter = { \
+		.name = XSTR(fname), \
+		.arg_size = sizeof(struct fname##_args), \
+		.ret_size = sizeof(ftype), \
+		.hook_id = -1, \
+	}; \
 	static inline UNUSED \
 	ftype call_##fname(NDX_FA(__VA_ARGS__)) { \
 		ftype ret; \
@@ -335,6 +345,7 @@ typedef void (*mod_cb_t)(void);
 	struct fname##_args { \
 		NDX_PG(__VA_ARGS__) \
 	}; \
+	extern ndx_adapter_t fname##_adapter; \
 	static inline UNUSED \
 	ftype call_##fname(NDX_FA(__VA_ARGS__)) { \
 		ftype ret; \
@@ -363,6 +374,7 @@ typedef void (*mod_cb_t)(void);
 		.arg_size = sizeof(struct fname##_args), \
 		.ret_size = sizeof(ftype), \
 		.call = &fname##_adapter_call, \
+		.hook_id = -1, \
 	}; \
 	void fname##_adapter_reg(void) { \
 		ndx_areg(XSTR(fname), &fname##_adapter); \
@@ -391,13 +403,12 @@ typedef void (*mod_cb_t)(void);
 /* the caller uses this to call */
 #define NDX_CALL(retp, fname, ...) { \
 	struct fname##_args args = { __VA_ARGS__ }; \
-	ndx_set_caller(__ndx_caller_path__); \
-	ndx_call(retp, XSTR(fname), &args); \
+	ndx_call(retp, &fname##_adapter, &args, __ndx_caller_path__); \
 }
 
 /* Internal types - used by ndx_t struct */
 typedef unsigned ndx_areg_t(char *name, ndx_adapter_t *adapter);
-typedef int ndx_call_t(void *retp, char *name, void *args);
+typedef int ndx_call_t(void *retp, ndx_adapter_t *adapter, void *args, const char *caller);
 typedef int ndx_last_t(void *ret);
 typedef void ndx_set_caller_t(const char *module_path);
 
@@ -482,7 +493,7 @@ typedef int ndx_intercept_t(const char *hook_name,
  * @param module_path    Path of the child module making the request (read-only)
  * @param requested_bits Number of bits the child asked for
  * @param granted_bits   Out-param: set to the approved width
- * @param ud             User data from ndx_on_claim()
+ * @param ud             User data from ndx_require_claim()
  * @return NDX_OK to approve (with *granted_bits set), NDX_ERR_EPERM to reject.
  */
 typedef int ndx_claim_handler_fn_t(const char *module_path,
@@ -491,35 +502,26 @@ typedef int ndx_claim_handler_fn_t(const char *module_path,
                                     void       *ud);
 
 /**
- * @brief Claim a sub-region of @p bits width under the caller's current region.
+ * @brief Set or clear the claim gate on the caller's current region.
  *
- * Only valid inside ndx_install().
- * The parent region's claim handler (if any) is invoked first; it may approve,
- * reduce the granted width, or reject.
+ * When @p fn is non-NULL, the gate is opened: all subsequent ndx_load() calls
+ * into this region require the module to export a `MODULE_API uint8_t ndx_claim`
+ * data symbol.  If the symbol is absent, ndx_load() returns NDX_ERR_EPERM and
+ * ndx_install() never runs.  If the symbol is present, the host performs the
+ * claim on behalf of the module by invoking @p fn before running ndx_install().
  *
- * On success the module's assigned region becomes the new child region.
- * Subsequent ndx_deny, ndx_intercept, ndx_pledge, ndx_load, and ndx_on_claim
- * calls from this module all operate on the child region.
+ * Modules loaded *before* this call in the same ndx_install() context are
+ * unaffected — they load flat into the current region as normal.
  *
- * @param bits  Requested child region width in bits (1–64).
- * @return NDX_OK on success, NDX_ERR_EPERM if rejected, NDX_ERR_TOOBIG if
- *         no free slot of the requested width exists.
- */
-typedef int ndx_claim_t(uint8_t bits);
-
-/**
- * @brief Register a claim handler on the caller's current region.
+ * When @p fn is NULL, the gate is cleared: subsequent ndx_load() calls no
+ * longer require an ndx_claim symbol.  A later non-NULL call re-enables the
+ * gate.
  *
- * When any module loaded into this region calls ndx_claim(), this handler is
- * invoked before the claim is processed.  Only one handler per region; a
- * second call replaces the first.  Without a handler, ndx_claim always fails
- * with NDX_ERR_EPERM.
- *
- * @param fn  Claim handler function.
- * @param ud  User data passed to fn.
+ * @param fn  Claim handler function, or NULL to clear the claim gate.
+ * @param ud  User data passed to fn (ignored when fn is NULL).
  * @return NDX_OK or negative NDX_ERR_* code.
  */
-typedef int ndx_on_claim_t(ndx_claim_handler_fn_t *fn, void *ud);
+typedef int ndx_require_claim_t(ndx_claim_handler_fn_t *fn, void *ud);
 
 /**
  * @brief Enumerate immediate child regions of the caller's current region.
@@ -540,8 +542,7 @@ ndx_last_t   ndx_last;
 ndx_pledge_t ndx_pledge;
 ndx_deny_t           ndx_deny;
 ndx_intercept_t      ndx_intercept;
-ndx_claim_t          ndx_claim;
-ndx_on_claim_t       ndx_on_claim;
+ndx_require_claim_t  ndx_require_claim;
 ndx_region_each_t    ndx_region_each;
 
 /**
@@ -623,8 +624,7 @@ struct ndx_ctx {
 	/* region management API */
 	ndx_deny_t            *deny;
 	ndx_intercept_t       *intercept;
-	ndx_claim_t           *claim;
-	ndx_on_claim_t        *on_claim;
+	ndx_require_claim_t   *require_claim;
 	ndx_region_each_t     *region_each;
 };
 #endif

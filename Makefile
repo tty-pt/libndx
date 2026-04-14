@@ -123,6 +123,36 @@ ${TEST_DIR}/test_region${EXE}: ${TEST_DIR} ${TEST_DIR}/test_region.c lib/libndx.
 	${cc} -o $@ ${TEST_DIR}/test_region.c ${CFLAGS} ${TEST_CFLAGS} \
 		${LDFLAGS} -lndx ${LDLIBS-libndx} ${TEST_LDFLAGS}
 
+GAME_HOOKS := ${TEST_DIR}/game_hooks.h
+
+${TEST_DIR}/mods/mod_game_world.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_game_world.c ${GAME_HOOKS} lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/mods/mod_game_world.c ${CFLAGS} ${TEST_CFLAGS} \
+		-fPIC -shared ${LDFLAGS} -lndx ${LDLIBS-libndx}
+
+${TEST_DIR}/mods/mod_game_physics.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_game_physics.c ${GAME_HOOKS} lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/mods/mod_game_physics.c ${CFLAGS} ${TEST_CFLAGS} \
+		-fPIC -shared ${LDFLAGS} -lndx ${LDLIBS-libndx}
+
+${TEST_DIR}/mods/mod_game_combat.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_game_combat.c ${GAME_HOOKS} lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/mods/mod_game_combat.c ${CFLAGS} ${TEST_CFLAGS} \
+		-fPIC -shared ${LDFLAGS} -lndx ${LDLIBS-libndx}
+
+${TEST_DIR}/mods/mod_game_loot.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_game_loot.c ${GAME_HOOKS} lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/mods/mod_game_loot.c ${CFLAGS} ${TEST_CFLAGS} \
+		-fPIC -shared ${LDFLAGS} -lndx ${LDLIBS-libndx}
+
+${TEST_DIR}/mods/mod_game_ai.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_game_ai.c ${GAME_HOOKS} lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/mods/mod_game_ai.c ${CFLAGS} ${TEST_CFLAGS} \
+		-fPIC -shared ${LDFLAGS} -lndx ${LDLIBS-libndx}
+
+${TEST_DIR}/mods/mod_game_no_claim.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_game_no_claim.c lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/mods/mod_game_no_claim.c ${CFLAGS} ${TEST_CFLAGS} \
+		-fPIC -shared ${LDFLAGS} -lndx ${LDLIBS-libndx}
+
+${TEST_DIR}/test_game${EXE}: ${TEST_DIR} ${TEST_DIR}/test_game.c ${GAME_HOOKS} lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/test_game.c ${CFLAGS} ${TEST_CFLAGS} \
+		-I${TEST_DIR} ${LDFLAGS} -lndx ${LDLIBS-libndx} ${TEST_LDFLAGS}
+
 TEST_MODS := ${TEST_DIR}/test_mod.${SO} \
 	${TEST_DIR}/mods/mod_basic.${SO} \
 	${TEST_DIR}/mods/mod_multi.${SO} \
@@ -139,7 +169,13 @@ TEST_MODS := ${TEST_DIR}/test_mod.${SO} \
 	${TEST_DIR}/mods/mod_region_moderator.${SO} \
 	${TEST_DIR}/mods/mod_claim_god.${SO} \
 	${TEST_DIR}/mods/mod_claim_worker.${SO} \
-	${TEST_DIR}/mods/mod_claim_greedy.${SO}
+	${TEST_DIR}/mods/mod_claim_greedy.${SO} \
+	${TEST_DIR}/mods/mod_game_world.${SO} \
+	${TEST_DIR}/mods/mod_game_physics.${SO} \
+	${TEST_DIR}/mods/mod_game_combat.${SO} \
+	${TEST_DIR}/mods/mod_game_loot.${SO} \
+	${TEST_DIR}/mods/mod_game_ai.${SO} \
+	${TEST_DIR}/mods/mod_game_no_claim.${SO}
 
 TEST_BINS := ${TEST_DIR}/test_core${EXE} \
 	${TEST_DIR}/test_errors${EXE} \
@@ -150,7 +186,8 @@ TEST_BINS := ${TEST_DIR}/test_core${EXE} \
 	${TEST_DIR}/test_multi_call${EXE} \
 	${TEST_DIR}/test_get${EXE} \
 	${TEST_DIR}/test_pledge${EXE} \
-	${TEST_DIR}/test_region${EXE}
+	${TEST_DIR}/test_region${EXE} \
+	${TEST_DIR}/test_game${EXE}
 
 test-build: lib/libndx.${SO} ${TEST_MODS} ${TEST_BINS}
 
@@ -175,4 +212,6 @@ test: test-build
 	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_pledge
 	@echo "Running test_region..."
 	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_region
+	@echo "Running test_game..."
+	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_game
 	@echo "All tests passed!"
