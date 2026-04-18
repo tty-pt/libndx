@@ -100,8 +100,21 @@ typedef struct ndx_mod_entry {
      * Otherwise → the cached function pointer. */
     void   **fn_cache;
     int      fn_cache_cap;
-    /* Intrusive list link within the owning region's mods_head list */
+    /* Doubly-linked list within the owning region's mods_head list (O(1) removal) */
     struct ndx_mod_entry *region_next;
+    struct ndx_mod_entry *region_prev;
+    /* Reference count: incremented on each ndx_load for the same (path, region);
+     * ndx_unload only actually unloads when refcount reaches zero. */
+    int refcount;
+    /* Module that loaded this one (NULL if loaded by host).
+     * Used for cascade-unload of children. */
+    struct ndx_mod_entry *parent_entry;
+    /* Owned copy of the composite hash key ("path\0<region_hex>") for removal */
+    char *mod_key;
+    /* Per-region module state: allocated by framework after ndx_install if the
+     * module exports ndx_region_state_size().  Freed (after optional
+     * ndx_region_cleanup() call) on unload. */
+    void *region_state;
 } ndx_mod_entry_t;
 
 /* -------------------------------------------------------------------------
@@ -129,6 +142,11 @@ typedef struct ndx_t_s {
 	ndx_intercept_t          *intercept;
 	ndx_require_claim_t      *require_claim;
 	ndx_region_each_t        *region_each;
+	/* unload / reload */
+	ndx_unload_t             *unload;
+	ndx_reload_t             *reload;
+	/* per-region module state — set by framework before each dispatch */
+	void                     *region_state;
 } ndx_t;
 
 extern ndx_t ndx;

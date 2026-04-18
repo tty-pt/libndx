@@ -558,6 +558,39 @@ typedef int ndx_load_t(char *fname);
 ndx_load_t ndx_load;
 
 /**
+ * @brief Unload a previously loaded module from the caller's current region.
+ *
+ * Decrements the module's reference count.  When the count reaches zero:
+ *  - Calls the module's ndx_uninstall() export (if present); if it returns
+ *    non-zero the unload is aborted and NDX_ERR_EPERM is returned.
+ *  - Recursively unloads child modules whose reference count would reach zero.
+ *  - Removes deny/pledge/intercept entries registered by the module.
+ *  - Invalidates cached function pointers across all other modules.
+ *  - Calls dlclose() and frees internal bookkeeping.
+ *
+ * @param fname  Path that was passed to ndx_load() (without .so/.dll suffix)
+ * @return NDX_OK on success, NDX_ERR_NOTFOUND if not loaded, NDX_ERR_EPERM if
+ *         ndx_uninstall() vetoed the unload.
+ */
+typedef int ndx_unload_t(char *fname);
+ndx_unload_t ndx_unload;
+
+/**
+ * @brief Reload a module in place, preserving its dispatch position.
+ *
+ * Equivalent to ndx_unload() followed by ndx_load() in the same region, but
+ * the reloaded module is re-inserted at its original position in the dispatch
+ * order rather than appended at the tail.
+ *
+ * If ndx_uninstall() vetoes the unload the reload is aborted.
+ *
+ * @param fname  Path that was passed to ndx_load() (without .so/.dll suffix)
+ * @return NDX_OK on success, negative NDX_ERR_* on failure.
+ */
+typedef int ndx_reload_t(char *fname);
+ndx_reload_t ndx_reload;
+
+/**
  * @brief Shutdown and unload all modules.
  *
  * Calls dlclose() on all loaded module handles.
@@ -626,5 +659,11 @@ struct ndx_ctx {
 	ndx_intercept_t       *intercept;
 	ndx_require_claim_t   *require_claim;
 	ndx_region_each_t     *region_each;
+	/* unload / reload */
+	ndx_unload_t          *unload;
+	ndx_reload_t          *reload;
+	/** @brief Per-region module state pointer; set by framework before each
+	 *  hook dispatch.  NULL if the module did not export ndx_region_state_size. */
+	void                  *region_state;
 };
 #endif

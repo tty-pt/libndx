@@ -32,7 +32,7 @@ A hook is a named, typed function that any number of modules can implement. The 
 
 Regions are isolated namespaces within the module graph. A `call_*` dispatches only to modules whose region is a descendant-or-equal of the caller's current region. The root region (region 0) reaches every module.
 
-A module opts into having its own region by calling `ndx_claim(bits)` from `ndx_install()`. The parent region must have a claim handler registered via `ndx_on_claim`; without one, `ndx_claim` always fails. Once claimed, all subsequent `ndx_load`, `ndx_deny`, `ndx_intercept`, and `ndx_pledge` calls from that module operate on the new child region.
+A module opts into having its own region by calling `ndx_claim(bits)` from `ndx_install()`. The parent region must have a claim handler registered via `ndx_require_claim`; without one, `ndx_claim` always fails. Once claimed, all subsequent `ndx_load`, `ndx_deny`, `ndx_intercept`, and `ndx_pledge` calls from that module operate on the new child region.
 
 ---
 
@@ -214,7 +214,7 @@ The parent's claim handler is invoked first. It may approve, reduce `bits`, or r
 
 On success:
 - The module's region becomes the newly created child.
-- All subsequent `ndx_load`, `ndx_deny`, `ndx_intercept`, `ndx_pledge`, and `ndx_on_claim` calls operate on the child region.
+- All subsequent `ndx_load`, `ndx_deny`, `ndx_intercept`, `ndx_pledge`, and `ndx_require_claim` calls operate on the child region.
 
 Returns `NDX_OK`, `NDX_ERR_EPERM` (rejected or no handler), or `NDX_ERR_TOOBIG` (no free slot).
 
@@ -227,11 +227,13 @@ void ndx_install(void)
 }
 ```
 
-#### `int ndx_on_claim(ndx_claim_handler_fn_t *fn, void *ud)`
+#### `int ndx_require_claim(ndx_claim_handler_fn_t *fn, void *ud)`
 
-Register a claim handler on the caller's current region. Only one handler per region; a second call replaces the first.
+Register a claim handler on the caller's current region and enforce the claim contract. Only one handler per region; a second non-NULL call replaces the first.
 
-The handler is invoked whenever a module loaded into this region calls `ndx_claim()`.
+When `fn` is non-NULL: any `ndx_load()` into this region whose module exports no `ndx_claim` symbol is rejected immediately (`ndx_install` never runs) and `ndx_load` returns `NDX_ERR_EPERM`. When the symbol is present, `fn` is invoked to approve or deny before `ndx_install` runs.
+
+When both `fn` and `ud` are NULL: clears the gate — subsequent loads no longer require `ndx_claim`.
 
 ```c
 typedef int ndx_claim_handler_fn_t(
@@ -255,8 +257,8 @@ static int my_handler(const char *path, uint8_t req,
 
 void ndx_install(void)
 {
-    ndx_on_claim(my_handler, NULL);
-    ndx_load("mods/child"); // child may now call ndx_claim(<=8)
+    ndx_require_claim(my_handler, NULL);
+    ndx_load("mods/child"); // child must export ndx_claim; approved up to 8 bits
 }
 ```
 
@@ -398,7 +400,7 @@ static int claim_handler(const char *path, uint8_t req,
 void ndx_install(void)
 {
     /* Register handler so child modules may claim */
-    ndx_on_claim(claim_handler, NULL);
+    ndx_require_claim(claim_handler, NULL);
 
     /* Claim a 1-bit slice for this module */
     if (ndx_claim(1) != NDX_OK) return;

@@ -81,6 +81,7 @@ typedef ndx_t* (*get_ndx_func_t)(void);
 ndx_t ndx;
 static volatile int ndx_inited;
 static void ndx_init_once(void);
+static int _mod_unload(char *fname, uint64_t region_id);
 
 /* Running count of successfully loaded modules (for alloca sizing in ndx_call) */
 static int ndx_mod_count;
@@ -104,6 +105,11 @@ static __thread const char *ndx_current_caller;
  * code that needs the entry must guard or call region_ensure_root() first. */
 static __thread uint64_t           ndx_current_region_id = NDX_REGION_ROOT;
 static __thread ndx_region_entry_t *ndx_current_region    = NULL;
+
+/* Thread-local pointer to the currently-loading module entry.
+ * Set during ndx_install() so child ndx_load() calls can register their
+ * parent_entry for cascade-unload tracking. */
+static __thread ndx_mod_entry_t *ndx_loading_mod = NULL;
 
 /* Keep the id/pointer pair in sync atomically (within a thread). */
 static inline void
@@ -708,6 +714,8 @@ void _ndx_init(void *ptr, const char *fname,
 	indx->intercept        = ndx_intercept;
 	indx->require_claim    = ndx_require_claim;
 	indx->region_each      = ndx_region_each;
+	indx->unload           = ndx_unload;
+	indx->reload           = ndx_reload;
 }
 
 int _mod_load(char *fname) {
@@ -737,9 +745,12 @@ int _mod_load(char *fname) {
 	char mod_key_buf[512];
 	mod_key(mod_key_buf, sizeof(mod_key_buf), fname, inherited_region_id);
 
-	const ndx_mod_entry_t *existing = qmap_ptr(qmap_get(mod_hd, mod_key_buf));
-	if (existing)
+	ndx_mod_entry_t *existing = qmap_ptr(qmap_get(mod_hd, mod_key_buf));
+	if (existing) {
+		existing->refcount++;
+		dlclose(sl); /* balance the extra dlopen; RTLD_NODELETE keeps it loaded */
 		return NDX_OK;
+	}
 
 	symbol = "ndx_install";
 	WARN("%s: '%s'\n", symbol, fname);
@@ -754,9 +765,12 @@ int _mod_load(char *fname) {
 
 	/* Register module early so concurrent ndx_loads see the entry. */
 	ndx_mod_entry_t *mod_entry = calloc(1, sizeof(*mod_entry));
-	mod_entry->handle    = sl;
-	mod_entry->region_id = inherited_region_id;
-	mod_entry->indx      = NULL;
+	mod_entry->handle       = sl;
+	mod_entry->region_id    = inherited_region_id;
+	mod_entry->indx         = NULL;
+	mod_entry->refcount     = 1;
+	mod_entry->parent_entry = ndx_loading_mod;
+	mod_entry->mod_key      = stable_key;
 	qmap_put(mod_hd, stable_key, &mod_entry);
 
 	get_ndx_func_t get_ndx = NULL;
@@ -788,9 +802,9 @@ int _mod_load(char *fname) {
 		qmap_del(mod_by_region_hd, &mod_entry->region_id);
 		qmap_del(mod_hd, stable_key);
 		free(mod_entry->fn_cache);
+		free(mod_entry->mod_key);
 		free(mod_entry);
 		free(stable_fname);
-		free(stable_key);
 		dlclose(sl);
 		NDX_SET_ERR(NDX_ERR_EPERM);
 		return NDX_ERR_EPERM;
@@ -820,16 +834,19 @@ int _mod_load(char *fname) {
 			qmap_del(mod_by_region_hd, &mod_entry->region_id);
 			qmap_del(mod_hd, stable_key);
 			free(mod_entry->fn_cache);
+			free(mod_entry->mod_key);
 			free(mod_entry);
 			free(stable_fname);
-			free(stable_key);
 			dlclose(sl);
 			return cret;
 		}
 		/* _ndx_claim_for_load updated ndx_current_region via set_current_region */
 	}
 
+	ndx_mod_entry_t *prev_loading_mod = ndx_loading_mod;
+	ndx_loading_mod = mod_entry;
 	int runret = _mod_run(sl, symbol);
+	ndx_loading_mod = prev_loading_mod;
 
 	/* Restore context */
 	set_current_region(prev_region_id, prev_region_entry);
@@ -839,14 +856,26 @@ int _mod_load(char *fname) {
 		qmap_del(mod_by_region_hd, &mod_entry->region_id);
 		qmap_del(mod_hd, stable_key);
 		free(mod_entry->fn_cache);
+		free(mod_entry->mod_key);
 		free(mod_entry);
 		free(stable_fname);
-		free(stable_key);
 		dlclose(sl);
 		return runret;
 	}
 
 	ndx_mod_count++;
+
+	/* Allocate per-region state if the module exports ndx_region_state_size */
+	{
+		typedef size_t ndx_region_state_size_t(void);
+		ndx_region_state_size_t *sz_fn = NULL;
+		*(void **)&sz_fn = dlsym(sl, "ndx_region_state_size");
+		if (sz_fn) {
+			size_t sz = sz_fn();
+			if (sz > 0)
+				mod_entry->region_state = calloc(1, sz);
+		}
+	}
 
 	/* Append mod_entry to its region's module list (preserves load order).
 	 * When do_claim ran, mod_entry->region_id was updated to the child region,
@@ -857,6 +886,7 @@ int _mod_load(char *fname) {
 		if (re) {
 			mod_entry->region_entry = re;
 			mod_entry->region_next  = NULL;
+			mod_entry->region_prev  = re->mods_tail;
 			if (re->mods_tail)
 				re->mods_tail->region_next = mod_entry;
 			else
@@ -876,8 +906,324 @@ int ndx_load(char *fname) {
 }
 
 /* -------------------------------------------------------------------------
- * ndx_last
+ * ndx_unload / ndx_reload
  * ------------------------------------------------------------------------- */
+
+/*
+ * Internal unload: looks up (fname, region_id) and performs the full teardown.
+ * Unload always succeeds — no veto.  Children loaded by this module are
+ * cascade-unloaded; if a child has other loaders (refcount > 1) it simply
+ * has its refcount decremented and stays active.
+ */
+static int
+_mod_unload(char *fname, uint64_t region_id)
+{
+	char mod_key_buf[512];
+	mod_key(mod_key_buf, sizeof(mod_key_buf), fname, region_id);
+
+	ndx_mod_entry_t *entry = qmap_ptr(qmap_get(mod_hd, mod_key_buf));
+	if (!entry) {
+		NDX_SET_ERR(NDX_ERR_NOTFOUND);
+		return NDX_ERR_NOTFOUND;
+	}
+
+	/* Decrement refcount — only actually unload when it hits zero */
+	entry->refcount--;
+	if (entry->refcount > 0)
+		return NDX_OK;
+
+	/* Cascade-unload children that were loaded by this module.
+	 * _mod_unload on a child with refcount > 1 simply decrements its
+	 * refcount and leaves it active — so shared children are safe. */
+	{
+		unsigned c = qmap_iter(mod_hd, NULL, 0);
+		const void *key, *value;
+		/* Collect children first to avoid iterator invalidation */
+		ndx_mod_entry_t **children = NULL;
+		int nchildren = 0, children_cap = 0;
+		while (qmap_next(&key, &value, c)) {
+			ndx_mod_entry_t *m = qmap_ptr(value);
+			if (m && m != entry && m->parent_entry == entry) {
+				if (nchildren >= children_cap) {
+					children_cap = children_cap ? children_cap * 2 : 8;
+					children = realloc(children,
+					                   children_cap * sizeof(*children));
+				}
+				children[nchildren++] = m;
+			}
+		}
+		for (int i = 0; i < nchildren; i++) {
+			ndx_mod_entry_t *child = children[i];
+			/* Build the fname from module_path (stored in indx) */
+			const char *child_path = child->indx ? child->indx->module_path : NULL;
+			if (child_path)
+				_mod_unload((char *)child_path, child->region_id);
+		}
+		free(children);
+	}
+
+	/* Invalidate fn_cache entries across all other modules that may have
+	 * cached a function pointer from the about-to-be-unloaded .so.
+	 * Strategy: use dladdr to check whether each cached pointer belongs to
+	 * the unloaded handle.  If dladdr returns info with dli_fbase matching
+	 * our handle's base, the entry is stale. */
+	{
+#ifndef _WIN32
+		/* Get the base address of the unloading library */
+		void *any_sym = dlsym(entry->handle, "ndx_install");
+		if (!any_sym) any_sym = dlsym(entry->handle, "get_ndx_ptr");
+		void *base = NULL;
+		if (any_sym) {
+			Dl_info di;
+			if (dladdr(any_sym, &di))
+				base = di.dli_fbase;
+		}
+		if (base) {
+			unsigned c = qmap_iter(mod_hd, NULL, 0);
+			const void *key, *value;
+			while (qmap_next(&key, &value, c)) {
+				ndx_mod_entry_t *m = qmap_ptr(value);
+				if (!m || m == entry) continue;
+				for (int i = 0; i < m->fn_cache_cap; i++) {
+					void *fp = m->fn_cache[i];
+					if (!fp || fp == NDX_FN_NOT_FOUND) continue;
+					Dl_info fi;
+					if (dladdr(fp, &fi) && fi.dli_fbase == base)
+						m->fn_cache[i] = NULL; /* force re-resolve */
+				}
+			}
+		}
+#endif
+	}
+
+	/* Remove deny entries for this module's path */
+	{
+		ndx_region_entry_t *re = entry->region_entry;
+		if (re) {
+			const char *path = entry->indx ? entry->indx->module_path : NULL;
+			if (path) {
+				/* denied_modules list */
+				ndx_deny_entry_t **pp = &re->denied_modules;
+				while (*pp) {
+					if (strcmp((*pp)->value, path) == 0) {
+						ndx_deny_entry_t *dead = *pp;
+						*pp = dead->next;
+						free(dead->value);
+						free(dead);
+					} else {
+						pp = &(*pp)->next;
+					}
+				}
+				/* interceptors registered by this module */
+				ndx_interceptor_entry_t **ip = &re->interceptors;
+				while (*ip) {
+					/* We identify interceptors by the module's fn_cache
+					 * address range — use the same dladdr base trick. */
+#ifndef _WIN32
+					void *base2 = NULL;
+					void *any2 = dlsym(entry->handle, "ndx_install");
+					if (!any2) any2 = dlsym(entry->handle, "get_ndx_ptr");
+					if (any2) {
+						Dl_info di2;
+						if (dladdr(any2, &di2)) base2 = di2.dli_fbase;
+					}
+					if (base2) {
+						Dl_info fi2;
+						void *fn_ptr;
+						memcpy(&fn_ptr, &(*ip)->fn, sizeof(fn_ptr));
+						if (dladdr(fn_ptr, &fi2) &&
+						    fi2.dli_fbase == base2) {
+							ndx_interceptor_entry_t *dead = *ip;
+							*ip = dead->next;
+							free(dead->hook_name);
+							free(dead);
+							continue;
+						}
+					}
+#endif
+					ip = &(*ip)->next;
+				}
+				/* pledges owned by this module in region-scoped pledge_hd */
+				if (re->pledge_hd) {
+					unsigned pc = qmap_iter(re->pledge_hd, NULL, 0);
+					const void *pk, *pv;
+					/* collect keys to delete */
+					const char **del_keys = NULL;
+					int ndel = 0, del_cap = 0;
+					while (qmap_next(&pk, &pv, pc)) {
+						const char *owner = qmap_ptr(pv);
+						if (owner && strcmp(owner, path) == 0) {
+							if (ndel >= del_cap) {
+								del_cap = del_cap ? del_cap*2 : 4;
+								del_keys = realloc(del_keys,
+								           del_cap * sizeof(char*));
+							}
+							del_keys[ndel++] = (const char *)pk;
+						}
+					}
+					for (int i = 0; i < ndel; i++) {
+						qmap_del(re->pledge_hd, del_keys[i]);
+						ndx_pledge_count--;
+					}
+					free(del_keys);
+				}
+				/* root pledge map */
+				{
+					unsigned pc = qmap_iter(pledge_hd, NULL, 0);
+					const void *pk, *pv;
+					const char **del_keys = NULL;
+					int ndel = 0, del_cap = 0;
+					while (qmap_next(&pk, &pv, pc)) {
+						const char *owner = qmap_ptr(pv);
+						if (owner && strcmp(owner, path) == 0) {
+							if (ndel >= del_cap) {
+								del_cap = del_cap ? del_cap*2 : 4;
+								del_keys = realloc(del_keys,
+								           del_cap * sizeof(char*));
+							}
+							del_keys[ndel++] = (const char *)pk;
+						}
+					}
+					for (int i = 0; i < ndel; i++) {
+						qmap_del(pledge_hd, del_keys[i]);
+						ndx_pledge_count--;
+					}
+					free(del_keys);
+				}
+			}
+		}
+	}
+
+	/* Remove from region's doubly-linked list (O(1)) */
+	{
+		ndx_region_entry_t *re = entry->region_entry;
+		if (re) {
+			if (entry->region_prev)
+				entry->region_prev->region_next = entry->region_next;
+			else
+				re->mods_head = entry->region_next;
+
+			if (entry->region_next)
+				entry->region_next->region_prev = entry->region_prev;
+			else
+				re->mods_tail = entry->region_prev;
+		}
+	}
+
+	/* Remove from hash maps */
+	qmap_del(mod_by_region_hd, &entry->region_id);
+	qmap_del(mod_hd, entry->mod_key);
+
+	ndx_mod_count--;
+
+	/* Release resources */
+	void *handle = entry->handle;
+	const char *module_path = entry->indx ? entry->indx->module_path : NULL;
+
+	/* Per-region state cleanup */
+	if (entry->region_state) {
+		typedef void ndx_region_cleanup_t(void *state);
+		ndx_region_cleanup_t *cleanup_fn = NULL;
+		*(void **)&cleanup_fn = dlsym(entry->handle, "ndx_region_cleanup");
+		if (cleanup_fn)
+			cleanup_fn(entry->region_state);
+		free(entry->region_state);
+	}
+
+	free(entry->fn_cache);
+	free(entry->mod_key);
+	if (module_path) free((char *)module_path);
+	free(entry);
+
+	/* dlclose balances the dlopen refcount.  Because we load with RTLD_NODELETE
+	 * the library is NOT physically removed from the address space — that is by
+	 * design (adapter objects in .data sections stay valid for sica_hd).  The
+	 * logical module entry has been removed above; the .so stays mapped. */
+	dlclose(handle);
+	return NDX_OK;
+}
+
+int ndx_unload(char *fname) {
+	ndx_init_once();
+	uint64_t region_id = ndx_current_region_id;
+	int ret = _mod_unload(fname, region_id);
+	NDX_SET_ERR(ret);
+	return ret;
+}
+
+int ndx_reload(char *fname) {
+	ndx_init_once();
+	uint64_t region_id = ndx_current_region_id;
+
+	/* Find the existing entry to record its position */
+	char mod_key_buf[512];
+	mod_key(mod_key_buf, sizeof(mod_key_buf), fname, region_id);
+	ndx_mod_entry_t *existing = qmap_ptr(qmap_get(mod_hd, mod_key_buf));
+	if (!existing) {
+		NDX_SET_ERR(NDX_ERR_NOTFOUND);
+		return NDX_ERR_NOTFOUND;
+	}
+
+	/* Save position in dispatch list */
+	ndx_mod_entry_t *insert_after = existing->region_prev; /* may be NULL (was head) */
+	ndx_region_entry_t *re = existing->region_entry;
+
+	/* Unload — this removes the entry from the list */
+	int uret = _mod_unload(fname, region_id);
+	if (uret != NDX_OK) {
+		NDX_SET_ERR(uret);
+		return uret;
+	}
+
+	/* Load the module again */
+	int lret = _mod_load(fname);
+	if (lret != NDX_OK) {
+		NDX_SET_ERR(lret);
+		return lret;
+	}
+
+	/* Re-find the newly loaded entry */
+	ndx_mod_entry_t *new_entry = qmap_ptr(qmap_get(mod_hd, mod_key_buf));
+	if (!new_entry || !re) {
+		NDX_SET_ERR(NDX_OK);
+		return NDX_OK;
+	}
+
+	/* Splice the new entry out of tail position and re-insert at saved position */
+	/* Remove from tail */
+	if (new_entry->region_prev)
+		new_entry->region_prev->region_next = new_entry->region_next;
+	else
+		re->mods_head = new_entry->region_next;
+	if (new_entry->region_next)
+		new_entry->region_next->region_prev = new_entry->region_prev;
+	else
+		re->mods_tail = new_entry->region_prev;
+
+	/* Insert after insert_after (or at head if insert_after == NULL) */
+	if (insert_after == NULL) {
+		/* Place at head */
+		new_entry->region_prev = NULL;
+		new_entry->region_next = re->mods_head;
+		if (re->mods_head)
+			re->mods_head->region_prev = new_entry;
+		else
+			re->mods_tail = new_entry;
+		re->mods_head = new_entry;
+	} else {
+		/* Insert after insert_after */
+		new_entry->region_prev = insert_after;
+		new_entry->region_next = insert_after->region_next;
+		if (insert_after->region_next)
+			insert_after->region_next->region_prev = new_entry;
+		else
+			re->mods_tail = new_entry;
+		insert_after->region_next = new_entry;
+	}
+
+	NDX_SET_ERR(NDX_OK);
+	return NDX_OK;
+}
 
 int ndx_last(void *ret) {
 	ndx_init_once();
@@ -962,6 +1308,7 @@ dispatch_next(void *args, void *ret, void *ud)
 		ndx_t *indx = me->indx;
 		if (!indx) continue;
 		indx->adapter = ctx->adapter;
+		indx->region_state = me->region_state;
 
 		uint64_t region_changed = (indx->region_id != ndx_current_region_id);
 		uint64_t            prev_rid    = ndx_current_region_id;
@@ -1171,6 +1518,7 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 
 				ndx_t *indx = me->indx;
 				indx->adapter = &ndx_last_adapter;
+				indx->region_state = me->region_state;
 
 				uint64_t region_changed = (indx->region_id != ndx_current_region_id);
 				uint64_t            prev_rid    = ndx_current_region_id;
@@ -1365,6 +1713,8 @@ shared_init(void)
 	ndx.intercept        = ndx_intercept;
 	ndx.require_claim    = ndx_require_claim;
 	ndx.region_each      = ndx_region_each;
+	ndx.unload           = ndx_unload;
+	ndx.reload           = ndx_reload;
 }
 
 static void

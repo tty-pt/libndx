@@ -111,6 +111,50 @@ ${TEST_DIR}/mods/mod_claim_greedy.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_claim_
 	${cc} -o $@ ${TEST_DIR}/mods/mod_claim_greedy.c ${CFLAGS} ${TEST_CFLAGS} \
 		-fPIC -shared ${LDFLAGS} -lndx ${LDLIBS-libndx}
 
+${TEST_DIR}/mods/mod_unload.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_unload.c lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/mods/mod_unload.c ${CFLAGS} ${TEST_CFLAGS} \
+		-fPIC -shared ${LDFLAGS} -lndx ${LDLIBS-libndx}
+
+${TEST_DIR}/mods/mod_unload2.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_unload2.c lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/mods/mod_unload2.c ${CFLAGS} ${TEST_CFLAGS} \
+		-fPIC -shared ${LDFLAGS} -lndx ${LDLIBS-libndx}
+
+${TEST_DIR}/mods/mod_cascade_child.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_cascade_child.c lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/mods/mod_cascade_child.c ${CFLAGS} ${TEST_CFLAGS} \
+		-fPIC -shared ${LDFLAGS} -lndx ${LDLIBS-libndx}
+
+${TEST_DIR}/mods/mod_cascade_parent.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_cascade_parent.c lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/mods/mod_cascade_parent.c ${CFLAGS} ${TEST_CFLAGS} \
+		-fPIC -shared ${LDFLAGS} -lndx ${LDLIBS-libndx}
+
+${TEST_DIR}/mods/mod_claim_simple.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_claim_simple.c lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/mods/mod_claim_simple.c ${CFLAGS} ${TEST_CFLAGS} \
+		-fPIC -shared ${LDFLAGS} -lndx ${LDLIBS-libndx}
+
+${TEST_DIR}/mods/mod_cascade_deep_a.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_cascade_deep_a.c lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/mods/mod_cascade_deep_a.c ${CFLAGS} ${TEST_CFLAGS} \
+		-fPIC -shared ${LDFLAGS} -lndx ${LDLIBS-libndx}
+
+${TEST_DIR}/mods/mod_cascade_deep_b.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_cascade_deep_b.c lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/mods/mod_cascade_deep_b.c ${CFLAGS} ${TEST_CFLAGS} \
+		-fPIC -shared ${LDFLAGS} -lndx ${LDLIBS-libndx}
+
+${TEST_DIR}/mods/mod_cascade_deep_c.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_cascade_deep_c.c lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/mods/mod_cascade_deep_c.c ${CFLAGS} ${TEST_CFLAGS} \
+		-fPIC -shared ${LDFLAGS} -lndx ${LDLIBS-libndx}
+
+${TEST_DIR}/mods/mod_region_state.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_region_state.c lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/mods/mod_region_state.c ${CFLAGS} ${TEST_CFLAGS} \
+		-fPIC -shared ${LDFLAGS} -lndx ${LDLIBS-libndx}
+
+${TEST_DIR}/test_region_state${EXE}: ${TEST_DIR} ${TEST_DIR}/test_region_state.c lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/test_region_state.c ${CFLAGS} ${TEST_CFLAGS} \
+		${LDFLAGS} -lndx ${LDLIBS-libndx} ${TEST_LDFLAGS}
+
+${TEST_DIR}/test_unload${EXE}: ${TEST_DIR} ${TEST_DIR}/test_unload.c lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/test_unload.c ${CFLAGS} ${TEST_CFLAGS} \
+		${LDFLAGS} -lndx ${LDLIBS-libndx} ${TEST_LDFLAGS}
+
 ${TEST_DIR}/test_pledge${EXE}: ${TEST_DIR} ${TEST_DIR}/test_pledge.c lib/libndx.${SO}
 	${cc} -o $@ ${TEST_DIR}/test_pledge.c ${CFLAGS} ${TEST_CFLAGS} \
 		${LDFLAGS} -lndx ${LDLIBS-libndx} ${TEST_LDFLAGS}
@@ -175,7 +219,16 @@ TEST_MODS := ${TEST_DIR}/test_mod.${SO} \
 	${TEST_DIR}/mods/mod_game_combat.${SO} \
 	${TEST_DIR}/mods/mod_game_loot.${SO} \
 	${TEST_DIR}/mods/mod_game_ai.${SO} \
-	${TEST_DIR}/mods/mod_game_no_claim.${SO}
+	${TEST_DIR}/mods/mod_game_no_claim.${SO} \
+	${TEST_DIR}/mods/mod_unload.${SO} \
+	${TEST_DIR}/mods/mod_unload2.${SO} \
+	${TEST_DIR}/mods/mod_cascade_child.${SO} \
+	${TEST_DIR}/mods/mod_cascade_parent.${SO} \
+	${TEST_DIR}/mods/mod_claim_simple.${SO} \
+	${TEST_DIR}/mods/mod_cascade_deep_a.${SO} \
+	${TEST_DIR}/mods/mod_cascade_deep_b.${SO} \
+	${TEST_DIR}/mods/mod_cascade_deep_c.${SO} \
+	${TEST_DIR}/mods/mod_region_state.${SO}
 
 TEST_BINS := ${TEST_DIR}/test_core${EXE} \
 	${TEST_DIR}/test_errors${EXE} \
@@ -187,7 +240,9 @@ TEST_BINS := ${TEST_DIR}/test_core${EXE} \
 	${TEST_DIR}/test_get${EXE} \
 	${TEST_DIR}/test_pledge${EXE} \
 	${TEST_DIR}/test_region${EXE} \
-	${TEST_DIR}/test_game${EXE}
+	${TEST_DIR}/test_game${EXE} \
+	${TEST_DIR}/test_unload${EXE} \
+	${TEST_DIR}/test_region_state${EXE}
 
 test-build: lib/libndx.${SO} ${TEST_MODS} ${TEST_BINS}
 
@@ -214,4 +269,8 @@ test: test-build
 	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_region
 	@echo "Running test_game..."
 	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_game
+	@echo "Running test_unload..."
+	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_unload
+	@echo "Running test_region_state..."
+	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_region_state
 	@echo "All tests passed!"

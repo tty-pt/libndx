@@ -115,8 +115,62 @@ ndx_mod_region_each_(struct ndx_ctx *_n, ndx_region_each_fn_t *fn, void *ud)
 { _n->set_caller(_n->module_path); return _n->region_each(fn, ud); }
 
 /**
+ * @brief Unload a module from the caller's current region.
+ *
+ * @param fname  Path passed to ndx_load() (without .so/.dll suffix)
+ */
+#define ndx_unload(fname) \
+	ndx_mod_unload_(&ndx, (fname))
+static inline UNUSED int
+ndx_mod_unload_(struct ndx_ctx *_n, char *f)
+{ _n->set_caller(_n->module_path); return _n->unload(f); }
+
+/**
+ * @brief Reload a module in place in the caller's current region.
+ *
+ * @param fname  Path passed to ndx_load() (without .so/.dll suffix)
+ */
+#define ndx_reload(fname) \
+	ndx_mod_reload_(&ndx, (fname))
+static inline UNUSED int
+ndx_mod_reload_(struct ndx_ctx *_n, char *f)
+{ _n->set_caller(_n->module_path); return _n->reload(f); }
+
+/**
  * @brief Return the region ID assigned to this module (diagnostic/internal).
  */
 #define ndx_my_region() (ndx.region_id)
+
+/* -------------------------------------------------------------------------
+ * Per-region module state helpers
+ *
+ * Usage:
+ *
+ *   NDX_REGION_STATE {
+ *       int    counter;
+ *       char  *label;
+ *   };
+ *   NDX_REGION_INIT;
+ *
+ *   // In any hook or ndx_install:
+ *   NDX_RS->counter++;
+ *
+ * NDX_REGION_STATE  — begins the struct definition (struct ndx_rs_s { ... })
+ * NDX_REGION_INIT   — emits ndx_region_state_size() after the struct closing
+ *                     brace; place on the line after the closing brace.
+ * NDX_RS            — typed pointer to this module's current region state.
+ *                     Valid only during hook dispatch or ndx_install.
+ * ------------------------------------------------------------------------- */
+
+/** Begin per-region state struct declaration. */
+#define NDX_REGION_STATE struct ndx_rs_s
+
+/** Emit the ndx_region_state_size() export after the struct definition. */
+#define NDX_REGION_INIT \
+	MODULE_API size_t ndx_region_state_size(void) \
+	{ return sizeof(struct ndx_rs_s); }
+
+/** Typed pointer to the current region's state block. */
+#define NDX_RS ((struct ndx_rs_s *)ndx.region_state)
 
 #endif
