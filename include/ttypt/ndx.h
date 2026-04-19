@@ -213,6 +213,26 @@ typedef struct {
 #define NDX_NA_15(a, b, ...)  args.b, NDX_NA_14(__VA_ARGS__)
 #define NDX_NA_16(a, b, ...)  args.b, NDX_NA_15(__VA_ARGS__)
 
+#define NDX_NP(...) CAT(NDX_NP_, \
+		NDX_PC(__VA_ARGS__))( __VA_ARGS__)
+
+#define NDX_NP_1(a, b)        __ndx_a->b
+#define NDX_NP_2(a, b, ...)   __ndx_a->b, NDX_NP_1(__VA_ARGS__)
+#define NDX_NP_3(a, b, ...)   __ndx_a->b, NDX_NP_2(__VA_ARGS__)
+#define NDX_NP_4(a, b, ...)   __ndx_a->b, NDX_NP_3(__VA_ARGS__)
+#define NDX_NP_5(a, b, ...)   __ndx_a->b, NDX_NP_4(__VA_ARGS__)
+#define NDX_NP_6(a, b, ...)   __ndx_a->b, NDX_NP_5(__VA_ARGS__)
+#define NDX_NP_7(a, b, ...)   __ndx_a->b, NDX_NP_6(__VA_ARGS__)
+#define NDX_NP_8(a, b, ...)   __ndx_a->b, NDX_NP_7(__VA_ARGS__)
+#define NDX_NP_9(a, b, ...)   __ndx_a->b, NDX_NP_8(__VA_ARGS__)
+#define NDX_NP_10(a, b, ...)  __ndx_a->b, NDX_NP_9(__VA_ARGS__)
+#define NDX_NP_11(a, b, ...)  __ndx_a->b, NDX_NP_10(__VA_ARGS__)
+#define NDX_NP_12(a, b, ...)  __ndx_a->b, NDX_NP_11(__VA_ARGS__)
+#define NDX_NP_13(a, b, ...)  __ndx_a->b, NDX_NP_12(__VA_ARGS__)
+#define NDX_NP_14(a, b, ...)  __ndx_a->b, NDX_NP_13(__VA_ARGS__)
+#define NDX_NP_15(a, b, ...)  __ndx_a->b, NDX_NP_14(__VA_ARGS__)
+#define NDX_NP_16(a, b, ...)  __ndx_a->b, NDX_NP_15(__VA_ARGS__)
+
 #define NDX_DA(...) CAT(NDX_DA_, \
 		NDX_PC(__VA_ARGS__))( __VA_ARGS__)
 
@@ -358,16 +378,15 @@ typedef void (*mod_cb_t)(void);
 	fname##_t fname; \
 	void fname##_adapter_call(void *res, void *fn, void *arg) { \
 	fname##_t *cast_fn; \
-		struct fname##_args args; \
-	memcpy(&args, arg, sizeof(args)); \
 	if (!fn) { \
 		WARN("%s_adapter_call: '%s' wasn't defined\n", \
 				XSTR(fname), XSTR(fname)); \
 		return; \
 	} \
 	* (void **) &cast_fn = fn; \
-		ftype result = cast_fn(NDX_NA(__VA_ARGS__)); \
-	if (res) memcpy(res, &result, sizeof(ftype)); \
+	struct fname##_args *__ndx_a = arg; (void)__ndx_a; \
+	ftype result = cast_fn(NDX_NP(__VA_ARGS__)); \
+	if (res) *(ftype *)res = result; \
 	} \
 	ndx_adapter_t fname##_adapter  __attribute__((visibility("default"))) = { \
 		.name = XSTR(fname), \
