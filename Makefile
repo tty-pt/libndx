@@ -305,3 +305,16 @@ test: test-build
 
 bench: test-build ${TEST_DIR}/bench_dispatch${EXE}
 	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/bench_dispatch
+
+clean: test-clean
+
+test-clean:
+	rm -f libndx.o \
+		${TEST_DIR}/mods/mod_dep.so \
+		${TEST_DIR}/mods/mod_dep_b.so \
+		${TEST_DIR}/mods/mod_dep_c.so \
+		${TEST_DIR}/mods/mod_dep_provider.o \
+		${TEST_MODS} \
+		${TEST_BINS} \
+		${TEST_DIR}/test_threads${EXE} \
+		${TEST_DIR}/bench_dispatch${EXE}

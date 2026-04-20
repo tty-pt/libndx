@@ -137,10 +137,6 @@ typedef int ndx_scope_fn_t(void *ud);
  */
 typedef void (*mod_cb_t)(void);
 
-#ifndef __ID_MARKER__
-#define __ID_MARKER__ static
-#endif
-
 #if defined(_WIN32)
   /**
    * @brief Export symbol from module (Windows).

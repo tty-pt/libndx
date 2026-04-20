@@ -66,26 +66,6 @@
 #define NDX_PG_15(a, b, ...)  a b; NDX_PG_14(__VA_ARGS__)
 #define NDX_PG_16(a, b, ...)  a b; NDX_PG_15(__VA_ARGS__)
 
-#define NDX_NA(...) CAT(NDX_NA_, \
-		NDX_PC(__VA_ARGS__))( __VA_ARGS__)
-
-#define NDX_NA_1(a, b)        args.b
-#define NDX_NA_2(a, b, ...)   args.b, NDX_NA_1(__VA_ARGS__)
-#define NDX_NA_3(a, b, ...)   args.b, NDX_NA_2(__VA_ARGS__)
-#define NDX_NA_4(a, b, ...)   args.b, NDX_NA_3(__VA_ARGS__)
-#define NDX_NA_5(a, b, ...)   args.b, NDX_NA_4(__VA_ARGS__)
-#define NDX_NA_6(a, b, ...)   args.b, NDX_NA_5(__VA_ARGS__)
-#define NDX_NA_7(a, b, ...)   args.b, NDX_NA_6(__VA_ARGS__)
-#define NDX_NA_8(a, b, ...)   args.b, NDX_NA_7(__VA_ARGS__)
-#define NDX_NA_9(a, b, ...)   args.b, NDX_NA_8(__VA_ARGS__)
-#define NDX_NA_10(a, b, ...)  args.b, NDX_NA_9(__VA_ARGS__)
-#define NDX_NA_11(a, b, ...)  args.b, NDX_NA_10(__VA_ARGS__)
-#define NDX_NA_12(a, b, ...)  args.b, NDX_NA_11(__VA_ARGS__)
-#define NDX_NA_13(a, b, ...)  args.b, NDX_NA_12(__VA_ARGS__)
-#define NDX_NA_14(a, b, ...)  args.b, NDX_NA_13(__VA_ARGS__)
-#define NDX_NA_15(a, b, ...)  args.b, NDX_NA_14(__VA_ARGS__)
-#define NDX_NA_16(a, b, ...)  args.b, NDX_NA_15(__VA_ARGS__)
-
 #define NDX_NP(...) CAT(NDX_NP_, \
 		NDX_PC(__VA_ARGS__))( __VA_ARGS__)
 
