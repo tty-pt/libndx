@@ -88,6 +88,7 @@ ndx_t ndx;
 static volatile int ndx_inited;
 static void __attribute__((cold)) ndx_init_once(void);
 static int _mod_unload(char *fname, uint64_t region_id);
+static int fn_cache_prewarm(ndx_mod_entry_t *me);
 
 /* Running count of successfully loaded modules (for alloca sizing in ndx_call) */
 static int ndx_mod_count;
@@ -961,6 +962,11 @@ int _mod_load(char *fname) {
 		}
 	}
 
+	/* T1.1: pre-resolve all known hooks for this module so the first
+	 * dispatch call doesn't pay dlsym latency. Best-effort: failure is
+	 * tolerated since fn_cache_resolve will retry lazily. */
+	(void)fn_cache_prewarm(mod_entry);
+
 	return NDX_OK;
 }
 
@@ -1375,6 +1381,44 @@ fn_cache_resolve(ndx_mod_entry_t *me, int hook_id, const char *name)
 	if (hook_id >= 0)
 		me->fn_cache[hook_id] = cb ? cb : NDX_FN_NOT_FOUND;
 	return cb;
+}
+
+/*
+ * fn_cache_prewarm — eagerly resolve all currently-known hooks for one
+ * module. Called at module-load time (T1.1) so the first hot-path call
+ * doesn't pay dlsym latency. Also called from ndx_areg for every loaded
+ * module when a new hook ID is minted, so the cache stays warm as the
+ * hook ID space grows.
+ *
+ * Returns 0 on success, -1 if cache growth (realloc) failed; caller
+ * should treat -1 as a soft failure (lazy resolve will retry per-call).
+ */
+static int
+fn_cache_prewarm(ndx_mod_entry_t *me)
+{
+	if (!me || !me->handle) return 0;
+	int needed = ndx_hook_id_counter;
+	if (needed <= 0) return 0;
+	if (needed > me->fn_cache_cap) {
+		int new_cap = needed + 16;
+		void **tmp = realloc(me->fn_cache, new_cap * sizeof(void *));
+		if (unlikely(!tmp)) return -1;
+		for (int i = me->fn_cache_cap; i < new_cap; i++) tmp[i] = NULL;
+		me->fn_cache = tmp;
+		me->fn_cache_cap = new_cap;
+	}
+	/* Iterate hook_id_hd (name → hook_id) and dlsym each in this module */
+	unsigned c = qmap_iter(hook_id_hd, NULL, 0);
+	const void *key, *value;
+	while (qmap_next(&key, &value, c)) {
+		const char *name = key;
+		int hook_id = *(const int *)value;
+		if (hook_id < 0 || hook_id >= me->fn_cache_cap) continue;
+		if (me->fn_cache[hook_id]) continue; /* already resolved */
+		void *cb = dlsym(me->handle, name);
+		me->fn_cache[hook_id] = cb ? cb : NDX_FN_NOT_FOUND;
+	}
+	return 0;
 }
 
 /*
@@ -1821,6 +1865,16 @@ ndx_areg(char *name, ndx_adapter_t *adapter)
 		ndx_adapter_by_id_cap = new_cap;
 	}
 	ndx_adapter_by_id[hook_id] = adapter;
+	/* T1.1: a new hook ID has been minted — eagerly resolve it in every
+	 * already-loaded module so the first dispatch finds it cached. */
+	if (mod_hd) {
+		unsigned c = qmap_iter(mod_hd, NULL, 0);
+		const void *k, *v;
+		while (qmap_next(&k, &v, c)) {
+			ndx_mod_entry_t *m = qmap_ptr(v);
+			if (m) (void)fn_cache_prewarm(m);
+		}
+	}
 	NDX_SET_ERR(NDX_OK);
 	return 0;
 }
