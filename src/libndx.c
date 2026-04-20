@@ -97,14 +97,11 @@ static int ndx_mod_count;
  * Used to skip the pledge_hd hash lookup entirely when no pledges exist. */
 static int ndx_pledge_count;
 
-/* Last-used adapter state, stored persistently so ndx.adapter doesn't dangle.
- * Thread-local so concurrent ndx_call from multiple threads doesn't race on
- * the 4 KB ret scratch area. */
-static __thread ndx_adapter_t ndx_last_adapter;
-/* Pointer to the registered adapter used in the last call.
- * When reg == ndx_last_reg the metadata fields of ndx_last_adapter are already
- * correct — we skip the 88-byte memcpy and only reset ran to 0. */
-static __thread const ndx_adapter_t *ndx_last_reg;
+/* T1.5: Per-call mutable state extracted from ndx_last_adapter to
+ * avoid the 88-byte memcpy on fast path. ndx_last() reads these instead
+ * of the full struct. */
+static __thread unsigned ndx_last_ran;
+static __thread void    *ndx_last_retp;
 
 /* Thread-local caller identity (for pledge enforcement) */
 static __thread const char *ndx_current_caller;
@@ -1308,12 +1305,14 @@ int ndx_last(void *ret) {
 		NDX_SET_ERR(NDX_ERR_INVALID);
 		return NDX_ERR_INVALID;
 	}
-	if (!ndx.adapter->ran) {
+	/* T1.5: ran stored in TLS; read ret bytes from TLS retp pointer */
+	if (!ndx_last_ran) {
 		NDX_SET_ERR(NDX_ERR_NOTFOUND);
 		return NDX_ERR_NOTFOUND;
 	}
-
-	memcpy(ret, ndx.adapter->ret, ndx.adapter->ret_size);
+	if (ret && ndx_last_retp) {
+		memcpy(ret, ndx_last_retp, ndx.adapter->ret_size);
+	}
 	NDX_SET_ERR(NDX_OK);
 	return NDX_OK;
 }
@@ -1655,11 +1654,10 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 	 * ------------------------------------------------------------------ */
 	int pre_err = NDX_GET_ERR();
 
-	/* Resolve dispatch call pointer into a stack local so nested ndx_call
-	 * invocations (from module bodies) cannot clobber what we dispatch.
-	 * ndx_last_adapter is __thread TLS shared across all nested calls on
-	 * this thread; using it as the dispatch vtable mid-loop is unsafe. */
-	void (*dispatch_call)(void *, void *, void *) = reg->call;
+/* Resolve dispatch call pointer into a stack local so nested ndx_call
+		 * invocations (from module bodies) cannot clobber what we dispatch.
+		 * ndx_last_* TLS is shared across nested calls; dispatch_call is stack-local. */
+		void (*dispatch_call)(void *, void *, void *) = reg->call;
 	if (unlikely(!dispatch_call && hook_id >= 0 && hook_id < ndx_adapter_by_id_cap)) {
 		const ndx_adapter_t *canonical = ndx_adapter_by_id[hook_id];
 		if (canonical) dispatch_call = canonical->call;
@@ -1675,14 +1673,11 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 
 		/* Pre-populate ndx_last_adapter metadata so ndx.adapter is valid
 		 * during module execution (modules may call ndx.last() mid-dispatch).
-		 * Skip the 88-byte metadata copy when the hook hasn't changed since
-		 * the last call — reg pointer identity suffices as a cache key. */
-		if (unlikely(reg != ndx_last_reg)) {
-			memcpy(&ndx_last_adapter, reg, offsetof(ndx_adapter_t, ret));
-			ndx_last_reg = reg;
-		}
-		ndx_last_adapter.ran = 0;
-		ndx.adapter = &ndx_last_adapter;
+		 * T1.5: point ndx.adapter directly at reg; store mutable per-call
+		 * state (ran, retp) in TLS to avoid the 88-byte memcpy. */
+		ndx_last_ran = 0;
+		ndx_last_retp = retp;
+		ndx.adapter = (ndx_adapter_t *)reg;
 
 		if (caller_region_entry) {
 			if (unlikely(caller_region_entry->subtree_mods_dirty)) {
@@ -1715,7 +1710,7 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 				int rc = ndx_dispatch_module(me,
 				                             reg->hook_id,
 				                             reg->name,
-				                             &ndx_last_adapter,
+				                             (ndx_adapter_t *)reg,
 				                             dispatch_call,
 				                             retp, arg,
 				                             /*commit_ret=*/0);
@@ -1727,10 +1722,9 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 			}
 		}
 
-		/* Commit ran and final ret value to ndx_last_adapter (metadata already set above) */
-		ndx_last_adapter.ran = ran;
-		if (ran)
-			memcpy(ndx_last_adapter.ret, retp, reg->ret_size);
+		/* Commit ran and final ret value to TLS (ndx.last() reads from here) */
+		ndx_last_ran = ran;
+		ndx_last_retp = ran ? retp : NULL;
 
 	} else {
 		/* ---- Slow path: collect entries[], build interceptor chain ---- */
@@ -1814,16 +1808,12 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 			return ctx.abort_err;
 		}
 
-		/* Commit to ndx_last_adapter — only copy metadata if hook changed */
-		if (unlikely(reg != ndx_last_reg)) {
-			memcpy(&ndx_last_adapter, reg, offsetof(ndx_adapter_t, ret));
-			ndx_last_reg = reg;
-		}
-		ndx_last_adapter.ran = adapter.ran;
-		memcpy(ndx_last_adapter.ret, adapter.ret, reg->ret_size);
+		/* Commit to TLS for ndx.last() */
+		ndx_last_ran = adapter.ran;
+		ndx_last_retp = adapter.ret;
 	}
 
-	ndx.adapter = &ndx_last_adapter;
+	ndx.adapter = (ndx_adapter_t *)reg;
 	if (NDX_GET_ERR() == pre_err)
 		NDX_SET_ERR(NDX_OK);
 	return NDX_OK;
@@ -1903,8 +1893,9 @@ ndx_shutdown(void)
 	/* Reset thread-local region pointer — entries were freed above */
 	ndx_current_region    = NULL;
 	ndx_current_region_id = NDX_REGION_ROOT;
-	/* Invalidate the adapter cache — registered adapters may be re-created */
-	ndx_last_reg = NULL;
+	/* Reset TLS state for ndx.last() */
+	ndx_last_ran = 0;
+	ndx_last_retp = NULL;
 	ndx_inited = 0;
 }
 
