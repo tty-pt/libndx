@@ -1321,6 +1321,62 @@ fn_cache_resolve(ndx_mod_entry_t *me, int hook_id, const char *name)
 	return cb;
 }
 
+/*
+ * ndx_dispatch_module — single per-module dispatch step shared by the
+ * fast path (ndx_call inner DFS loop) and the slow path (dispatch_next).
+ *
+ * always_inline guarantees zero call overhead at both sites; commit_ret
+ * is a compile-time constant per call site so its branch is folded away.
+ *
+ * Returns:
+ *   0                  → ran successfully (caller bumps ran counter)
+ *  -1                  → skipped (module doesn't export this hook, or
+ *                        me->indx is NULL)
+ *   NDX_ERR_INVALID    → fn_cache growth failed; caller propagates per
+ *                        its dispatch context (fast path: set errno +
+ *                        return; slow path: set ctx->abort_err + return)
+ *
+ * DISPATCH-SAFETY INVARIANT: helper takes hook_id/name/adapter as
+ * parameters from caller's stack/ctx. It does NOT read ndx_last_adapter.
+ * See fn_cache_resolve comment.
+ */
+static inline int __attribute__((always_inline, hot))
+ndx_dispatch_module(ndx_mod_entry_t *me,
+                    int              hook_id,
+                    const char      *name,
+                    ndx_adapter_t   *adapter,
+                    void           (*call_fn)(void *, void *, void *),
+                    void            *retp,
+                    void            *arg,
+                    int              commit_ret)
+{
+	ndx_t *indx = me->indx;
+	if (unlikely(!indx)) return -1;
+
+	void *cb = fn_cache_resolve(me, hook_id, name);
+	if (unlikely(cb == NDX_FN_RESOLVE_OOM)) return NDX_ERR_INVALID;
+	if (!cb) return -1;
+
+	indx->adapter      = adapter;
+	indx->region_state = me->region_state;
+
+	uint64_t region_changed = (indx->region_id != ndx_current_region_id);
+	uint64_t            prev_rid    = ndx_current_region_id;
+	ndx_region_entry_t *prev_rentry = ndx_current_region;
+	if (unlikely(region_changed))
+		set_current_region(indx->region_id, me->region_entry);
+
+	call_fn(retp, cb, arg);
+
+	if (unlikely(region_changed))
+		set_current_region(prev_rid, prev_rentry);
+
+	if (commit_ret)
+		memcpy(adapter->ret, retp, adapter->ret_size);
+
+	return 0;
+}
+
 static void dispatch_next(void *args, void *ret, void *ud);
 
 static void
@@ -1337,37 +1393,18 @@ dispatch_next(void *args, void *ret, void *ud)
 
 	for (int i = 0; i < ctx->entry_count; i++) {
 		ndx_mod_entry_t *me = ctx->entries[i];
-		ndx_t *indx = me->indx;
-		if (!indx) continue;
-
-		/* fn_cache lookup — uses ctx->adapter (stack-local copy owned by
-		 * ndx_call's slow path frame). MUST NOT read ndx_last_adapter. */
-		void *cb = fn_cache_resolve(me, ctx->adapter->hook_id,
-		                            ctx->adapter->name);
-		if (unlikely(cb == NDX_FN_RESOLVE_OOM)) {
+		int rc = ndx_dispatch_module(me,
+		                             ctx->adapter->hook_id,
+		                             ctx->adapter->name,
+		                             ctx->adapter,
+		                             ctx->adapter->call,
+		                             ret, args,
+		                             /*commit_ret=*/1);
+		if (unlikely(rc == NDX_ERR_INVALID)) {
 			ctx->abort_err = NDX_ERR_INVALID;
 			return;
 		}
-		if (!cb) continue;
-
-		indx->adapter = ctx->adapter;
-		indx->region_state = me->region_state;
-
-		uint64_t region_changed = (indx->region_id != ndx_current_region_id);
-		uint64_t            prev_rid    = ndx_current_region_id;
-		ndx_region_entry_t *prev_rentry = ndx_current_region;
-		if (unlikely(region_changed))
-			set_current_region(indx->region_id, me->region_entry);
-
-		ctx->adapter->call(ret, cb, args);
-
-		if (unlikely(region_changed))
-			set_current_region(prev_rid, prev_rentry);
-
-		(*ctx->ran_out)++;
-		/* Middleware may read/write adapter->ret between modules — commit
-		 * each iteration so observer state stays synchronized. */
-		memcpy(ctx->adapter->ret, ret, ctx->adapter->ret_size);
+		if (rc == 0) (*ctx->ran_out)++;
 	}
 }
 
@@ -1574,33 +1611,18 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 						if (denied) continue;
 					}
 
-					ndx_t *indx = me->indx;
-					/* fn_cache lookup — uses reg->hook_id/reg->name (stack-
-					 * local). MUST NOT read ndx_last_adapter: nested ndx_call
-					 * clobbers TLS mid-iteration. See fn_cache_resolve. */
-					void *cb = fn_cache_resolve(me, reg->hook_id, reg->name);
-					if (unlikely(cb == NDX_FN_RESOLVE_OOM)) {
+					int rc = ndx_dispatch_module(me,
+					                             reg->hook_id,
+					                             reg->name,
+					                             &ndx_last_adapter,
+					                             dispatch_call,
+					                             retp, arg,
+					                             /*commit_ret=*/0);
+					if (unlikely(rc == NDX_ERR_INVALID)) {
 						NDX_SET_ERR(NDX_ERR_INVALID);
 						return NDX_ERR_INVALID;
 					}
-					if (!cb) continue;
-
-					indx->adapter = &ndx_last_adapter;
-					indx->region_state = me->region_state;
-
-					uint64_t region_changed =
-						(indx->region_id != ndx_current_region_id);
-					uint64_t            prev_rid    = ndx_current_region_id;
-					ndx_region_entry_t *prev_rentry = ndx_current_region;
-					if (unlikely(region_changed))
-						set_current_region(indx->region_id, me->region_entry);
-
-					dispatch_call(retp, cb, arg);
-
-					if (unlikely(region_changed))
-						set_current_region(prev_rid, prev_rentry);
-
-					ran++;
+					if (rc == 0) ran++;
 				}
 
 				for (ndx_region_entry_t *ch = (ndx_region_entry_t *)rn->children_head;
