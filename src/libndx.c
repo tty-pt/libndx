@@ -258,7 +258,58 @@ region_entry_free(ndx_region_entry_t *e)
 	deny_list_free(e->denied_hooks);
 	deny_list_free(e->denied_modules);
 	interceptor_list_free(e->interceptors);
+	free(e->subtree_mods);
 	free(e);
+}
+
+/* T1.2: mark the subtree module cache dirty along the ancestor chain from
+ * `entry` (inclusive) up to the root. Called whenever a module is added or
+ * removed from any region, or when a new child region is claimed. O(depth). */
+static inline void
+region_mark_subtree_dirty(ndx_region_entry_t *entry)
+{
+	for (ndx_region_entry_t *e = entry; e; e = e->parent)
+		e->subtree_mods_dirty = 1;
+}
+
+/* Rebuild region->subtree_mods[] in DFS order (region's own modules first,
+ * then each child's subtree recursively). Grows the backing array via tmp
+ * pointer for OOM safety. Returns 0 on success, -1 on allocation failure. */
+static int
+region_rebuild_subtree_mods(ndx_region_entry_t *root)
+{
+	if (!root) return 0;
+	root->subtree_mods_count = 0;
+
+	/* DFS with an explicit stack — same 65-slot bound as before. */
+	ndx_region_entry_t *stk[65];
+	int stk_top = 0;
+	stk[stk_top++] = root;
+
+	while (stk_top > 0) {
+		ndx_region_entry_t *rn = stk[--stk_top];
+
+		for (ndx_mod_entry_t *me = (ndx_mod_entry_t *)rn->mods_head;
+		     me; me = me->region_next) {
+			if (root->subtree_mods_count >= root->subtree_mods_cap) {
+				int new_cap = root->subtree_mods_cap
+					? root->subtree_mods_cap * 2 : 8;
+				ndx_mod_entry_t **tmp = realloc(root->subtree_mods,
+					new_cap * sizeof(*tmp));
+				if (unlikely(!tmp)) return -1;
+				root->subtree_mods = tmp;
+				root->subtree_mods_cap = new_cap;
+			}
+			root->subtree_mods[root->subtree_mods_count++] = me;
+		}
+
+		for (ndx_region_entry_t *ch = rn->children_head;
+		     ch && stk_top < 65; ch = ch->sibling_next)
+			stk[stk_top++] = ch;
+	}
+
+	root->subtree_mods_dirty = 0;
+	return 0;
 }
 
 /* Ensure the root region entry exists */
@@ -526,6 +577,7 @@ _ndx_claim_for_load(const char *caller, uint64_t parent_id,
 	/* Wire child into parent's children list */
 	child->sibling_next   = (ndx_region_entry_t *)parent->children_head;
 	parent->children_head = child;
+	region_mark_subtree_dirty(parent);
 
 	/* Update the thread-local region context so ndx_install sees child */
 	set_current_region(child_id, child);
@@ -905,6 +957,7 @@ int _mod_load(char *fname) {
 			else
 				re->mods_head = mod_entry;
 			re->mods_tail = mod_entry;
+			region_mark_subtree_dirty(re);
 		}
 	}
 
@@ -1122,6 +1175,7 @@ _mod_unload(char *fname, uint64_t region_id)
 				entry->region_next->region_prev = entry->region_prev;
 			else
 				re->mods_tail = entry->region_prev;
+			region_mark_subtree_dirty(re);
 		}
 	}
 
@@ -1235,6 +1289,8 @@ int ndx_reload(char *fname) {
 			re->mods_tail = new_entry;
 		insert_after->region_next = new_entry;
 	}
+
+	region_mark_subtree_dirty(re);
 
 	NDX_SET_ERR(NDX_OK);
 	return NDX_OK;
@@ -1585,50 +1641,45 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 		ndx.adapter = &ndx_last_adapter;
 
 		if (caller_region_entry) {
-			ndx_region_entry_t *stk[65];
-			int stk_top = 0;
-			stk[stk_top++] = caller_region_entry;
+			if (unlikely(caller_region_entry->subtree_mods_dirty)) {
+				if (region_rebuild_subtree_mods(caller_region_entry) < 0) {
+					NDX_SET_ERR(NDX_ERR_INVALID);
+					return NDX_ERR_INVALID;
+				}
+			}
+			ndx_mod_entry_t **mods = caller_region_entry->subtree_mods;
+			int n = caller_region_entry->subtree_mods_count;
+			for (int mi = 0; mi < n; mi++) {
+				ndx_mod_entry_t *me = mods[mi];
+				/* Prefetch next module's hot cache line */
+				if (mi + 1 < n)
+					__builtin_prefetch(mods[mi + 1], 0, 1);
+				if (!me->indx) continue;
 
-			while (stk_top > 0) {
-				ndx_region_entry_t *rn = stk[--stk_top];
-
-				for (ndx_mod_entry_t *me = (ndx_mod_entry_t *)rn->mods_head;
-				     me; me = me->region_next) {
-					/* Prefetch next module's hot cache line (indx, region_next,
-					 * fn_cache pointer all live in the first 64 B per papi.h). */
-					if (me->region_next)
-						__builtin_prefetch(me->region_next, 0, 1);
-					if (!me->indx) continue;
-
-					/* Module-denied check (only when subtree has denies) */
-					if (unlikely(has_deny_pledge)) {
-						int denied = 0;
-						const char *mpath = me->indx->module_path;
-						for (int i = 0; i < anc_n && !denied; i++) {
-							unsigned s = anc_chain[i]->denied_modules_set;
-							if (s && qmap_get(s, mpath))
-								denied = 1;
-						}
-						if (denied) continue;
+				/* Module-denied check (only when subtree has denies) */
+				if (unlikely(has_deny_pledge)) {
+					int denied = 0;
+					const char *mpath = me->indx->module_path;
+					for (int i = 0; i < anc_n && !denied; i++) {
+						unsigned s = anc_chain[i]->denied_modules_set;
+						if (s && qmap_get(s, mpath))
+							denied = 1;
 					}
-
-					int rc = ndx_dispatch_module(me,
-					                             reg->hook_id,
-					                             reg->name,
-					                             &ndx_last_adapter,
-					                             dispatch_call,
-					                             retp, arg,
-					                             /*commit_ret=*/0);
-					if (unlikely(rc == NDX_ERR_INVALID)) {
-						NDX_SET_ERR(NDX_ERR_INVALID);
-						return NDX_ERR_INVALID;
-					}
-					if (rc == 0) ran++;
+					if (denied) continue;
 				}
 
-				for (ndx_region_entry_t *ch = (ndx_region_entry_t *)rn->children_head;
-				     ch && stk_top < 65; ch = (ndx_region_entry_t *)ch->sibling_next)
-					stk[stk_top++] = ch;
+				int rc = ndx_dispatch_module(me,
+				                             reg->hook_id,
+				                             reg->name,
+				                             &ndx_last_adapter,
+				                             dispatch_call,
+				                             retp, arg,
+				                             /*commit_ret=*/0);
+				if (unlikely(rc == NDX_ERR_INVALID)) {
+					NDX_SET_ERR(NDX_ERR_INVALID);
+					return NDX_ERR_INVALID;
+				}
+				if (rc == 0) ran++;
 			}
 		}
 
@@ -1645,32 +1696,28 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 		int entry_count = 0;
 
 		if (caller_region_entry) {
-			ndx_region_entry_t *stk[65];
-			int stk_top = 0;
-			stk[stk_top++] = caller_region_entry;
-
-			while (stk_top > 0) {
-				ndx_region_entry_t *rn = stk[--stk_top];
-
-				for (ndx_mod_entry_t *me = (ndx_mod_entry_t *)rn->mods_head;
-				     me; me = me->region_next) {
-					if (me->region_next)
-						__builtin_prefetch(me->region_next, 0, 1);
-					if (!me->indx) continue;
-					int denied = 0;
-					const char *mpath = me->indx->module_path;
-					for (int i = 0; i < anc_n && !denied; i++) {
-						unsigned s = anc_chain[i]->denied_modules_set;
-						if (s && qmap_get(s, mpath))
-							denied = 1;
-					}
-					if (!denied && entry_count < total_mods)
-						entries[entry_count++] = me;
+			if (unlikely(caller_region_entry->subtree_mods_dirty)) {
+				if (region_rebuild_subtree_mods(caller_region_entry) < 0) {
+					NDX_SET_ERR(NDX_ERR_INVALID);
+					return NDX_ERR_INVALID;
 				}
-
-				for (ndx_region_entry_t *ch = (ndx_region_entry_t *)rn->children_head;
-				     ch && stk_top < 65; ch = (ndx_region_entry_t *)ch->sibling_next)
-					stk[stk_top++] = ch;
+			}
+			ndx_mod_entry_t **mods = caller_region_entry->subtree_mods;
+			int n = caller_region_entry->subtree_mods_count;
+			for (int mi = 0; mi < n; mi++) {
+				ndx_mod_entry_t *me = mods[mi];
+				if (mi + 1 < n)
+					__builtin_prefetch(mods[mi + 1], 0, 1);
+				if (!me->indx) continue;
+				int denied = 0;
+				const char *mpath = me->indx->module_path;
+				for (int i = 0; i < anc_n && !denied; i++) {
+					unsigned s = anc_chain[i]->denied_modules_set;
+					if (s && qmap_get(s, mpath))
+						denied = 1;
+				}
+				if (!denied && entry_count < total_mods)
+					entries[entry_count++] = me;
 			}
 		}
 

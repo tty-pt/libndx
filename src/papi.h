@@ -88,6 +88,16 @@ typedef struct ndx_region_entry {
 	/* Intrusive list of modules assigned to this region (append on load, preserves order) */
 	struct ndx_mod_entry     *mods_head;
 	struct ndx_mod_entry     *mods_tail;
+
+	/* T1.2: flat subtree module vector, cached in DFS order over descendant
+	 * regions. Rebuilt lazily when subtree_mods_dirty is set; all mutators
+	 * (ndx_load, ndx_unload, ndx_reload, ndx_claim) walk up from the
+	 * affected region and mark ancestors dirty. Fast path iterates this
+	 * array with a single linear scan — no per-call DFS stack. */
+	struct ndx_mod_entry    **subtree_mods;
+	int                       subtree_mods_count;
+	int                       subtree_mods_cap;
+	uint8_t                   subtree_mods_dirty;
 } ndx_region_entry_t;
 
 /*
