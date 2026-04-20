@@ -58,6 +58,8 @@ typedef struct ndx_region_entry {
 
 	ndx_deny_entry_t         *denied_hooks;   /* hook names blocked here */
 	ndx_deny_entry_t         *denied_modules; /* module paths blocked here */
+	unsigned                  denied_hooks_set;   /* qmap hash set: hook name -> sentinel */
+	unsigned                  denied_modules_set; /* qmap hash set: module path -> sentinel */
 	ndx_interceptor_entry_t  *interceptors;   /* middleware chain (head) */
 
 	unsigned                  pledge_hd;      /* per-region qmap: hook->owner */
@@ -87,21 +89,32 @@ typedef struct ndx_region_entry {
 /*
  * Per-module metadata stored in mod_hd.
  * Keyed by "path\0<region_hex>" to allow same .so in multiple regions.
+ *
+ * Field order is tuned so the hot dispatch cluster (indx, region_next,
+ * fn_cache, fn_cache_cap, region_state, handle, region_entry) fits in the
+ * first cache line; cold load/unload bookkeeping lives after.
  */
 typedef struct ndx_mod_entry {
-    void    *handle;
-    uint64_t region_id;
+    /* ---- HOT: touched on every dispatch iteration ---- */
     ndx_t   *indx;
-    /* Direct pointer to the owning region entry — avoids hash lookup in dispatch. */
-    struct ndx_region_entry *region_entry;
+    /* Doubly-linked list within the owning region's mods_head list (O(1) removal) */
+    struct ndx_mod_entry *region_next;
     /* Per-hook function-pointer cache.
      * fn_cache[hook_id] == NULL  → not yet resolved (lazy dlsym on first call).
      * fn_cache[hook_id] == NDX_FN_NOT_FOUND → dlsym returned NULL for this hook.
      * Otherwise → the cached function pointer. */
     void   **fn_cache;
     int      fn_cache_cap;
-    /* Doubly-linked list within the owning region's mods_head list (O(1) removal) */
-    struct ndx_mod_entry *region_next;
+    /* Per-region module state: allocated by framework after ndx_install if the
+     * module exports ndx_region_state_size().  Freed (after optional
+     * ndx_region_cleanup() call) on unload. */
+    void *region_state;
+    void    *handle;
+    /* Direct pointer to the owning region entry — avoids hash lookup in dispatch. */
+    struct ndx_region_entry *region_entry;
+
+    /* ---- COLD: load / unload / bookkeeping ---- */
+    uint64_t region_id;
     struct ndx_mod_entry *region_prev;
     /* Reference count: incremented on each ndx_load for the same (path, region);
      * ndx_unload only actually unloads when refcount reaches zero. */
@@ -111,10 +124,6 @@ typedef struct ndx_mod_entry {
     struct ndx_mod_entry *parent_entry;
     /* Owned copy of the composite hash key ("path\0<region_hex>") for removal */
     char *mod_key;
-    /* Per-region module state: allocated by framework after ndx_install if the
-     * module exports ndx_region_state_size().  Freed (after optional
-     * ndx_region_cleanup() call) on unload. */
-    void *region_state;
 } ndx_mod_entry_t;
 
 /* -------------------------------------------------------------------------

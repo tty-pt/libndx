@@ -48,6 +48,12 @@
 #define SICA_MASK   0x7FFF
 #define REGION_MASK 0x7FFF
 
+/* Branch-prediction hints — kernel-style */
+#ifndef likely
+#  define likely(x)   __builtin_expect(!!(x), 1)
+#  define unlikely(x) __builtin_expect(!!(x), 0)
+#endif
+
 enum opts {
 	OPT_DETACH = 1,
 };
@@ -80,7 +86,7 @@ typedef ndx_t* (*get_ndx_func_t)(void);
 
 ndx_t ndx;
 static volatile int ndx_inited;
-static void ndx_init_once(void);
+static void __attribute__((cold)) ndx_init_once(void);
 static int _mod_unload(char *fname, uint64_t region_id);
 
 /* Running count of successfully loaded modules (for alloca sizing in ndx_call) */
@@ -90,12 +96,14 @@ static int ndx_mod_count;
  * Used to skip the pledge_hd hash lookup entirely when no pledges exist. */
 static int ndx_pledge_count;
 
-/* Last-used adapter state, stored persistently so ndx.adapter doesn't dangle */
-static ndx_adapter_t ndx_last_adapter;
+/* Last-used adapter state, stored persistently so ndx.adapter doesn't dangle.
+ * Thread-local so concurrent ndx_call from multiple threads doesn't race on
+ * the 4 KB ret scratch area. */
+static __thread ndx_adapter_t ndx_last_adapter;
 /* Pointer to the registered adapter used in the last call.
  * When reg == ndx_last_reg the metadata fields of ndx_last_adapter are already
  * correct — we skip the 88-byte memcpy and only reset ran to 0. */
-static const ndx_adapter_t *ndx_last_reg;
+static __thread const ndx_adapter_t *ndx_last_reg;
 
 /* Thread-local caller identity (for pledge enforcement) */
 static __thread const char *ndx_current_caller;
@@ -197,15 +205,6 @@ region_ancestor_chain(ndx_region_entry_t *start,
 		chain[b] = tmp;
 	}
 	return n;
-}
-
-/* Check if hook_name is in a deny list */
-static int
-deny_list_contains(ndx_deny_entry_t *head, const char *value)
-{
-	for (ndx_deny_entry_t *e = head; e; e = e->next)
-		if (strcmp(e->value, value) == 0) return 1;
-	return 0;
 }
 
 /* Propagate a subtree flag upward from entry to root. */
@@ -591,9 +590,23 @@ int ndx_deny(const char *what, ndx_deny_type_t type) {
 	if (type == NDX_DENY_HOOK) {
 		node->next = reg->denied_hooks;
 		reg->denied_hooks = node;
+		if (!reg->denied_hooks_set)
+			reg->denied_hooks_set = qmap_open(NULL, NULL, QM_STR,
+			                                  ndx_ptr_type, MOD_MASK, 0);
+		{
+			void *sentinel = (void *)(uintptr_t)1;
+			qmap_put(reg->denied_hooks_set, node->value, &sentinel);
+		}
 	} else {
 		node->next = reg->denied_modules;
 		reg->denied_modules = node;
+		if (!reg->denied_modules_set)
+			reg->denied_modules_set = qmap_open(NULL, NULL, QM_STR,
+			                                    ndx_ptr_type, MOD_MASK, 0);
+		{
+			void *sentinel = (void *)(uintptr_t)1;
+			qmap_put(reg->denied_modules_set, node->value, &sentinel);
+		}
 	}
 	region_propagate_deny(reg);
 
@@ -1008,6 +1021,8 @@ _mod_unload(char *fname, uint64_t region_id)
 					if (strcmp((*pp)->value, path) == 0) {
 						ndx_deny_entry_t *dead = *pp;
 						*pp = dead->next;
+						if (re->denied_modules_set)
+							qmap_del(re->denied_modules_set, dead->value);
 						free(dead->value);
 						free(dead);
 					} else {
@@ -1258,7 +1273,12 @@ typedef struct {
 	ndx_mod_entry_t         **entries;
 	int                       entry_count;
 	int                       hook_id;   /* pre-resolved at ndx_call time */
+	int                       abort_err; /* non-zero → abort the chain (OOM etc.) */
 } ndx_dispatch_ctx_t;
+
+/* Keep dispatch context compact; grows only with deliberate review. */
+_Static_assert(sizeof(ndx_dispatch_ctx_t) <= 72,
+               "ndx_dispatch_ctx_t grew — review hot-path cache footprint");
 
 static void dispatch_next(void *args, void *ret, void *ud);
 
@@ -1276,60 +1296,54 @@ dispatch_next(void *args, void *ret, void *ud)
 
 	for (int i = 0; i < ctx->entry_count; i++) {
 		ndx_mod_entry_t *me = ctx->entries[i];
-
-		/* Resolve function pointer via per-module cache (avoid dlsym per call).
-		 * hook_id was pre-resolved in ndx_call — no hash lookup here. */
-		int hook_id = ctx->hook_id;
-		void *cb = NULL;
-		if (__builtin_expect(hook_id >= 0, 1)) {
-			/* Grow cache if needed */
-			if (hook_id >= me->fn_cache_cap) {
-				int new_cap = hook_id + 16;
-				me->fn_cache = realloc(me->fn_cache, new_cap * sizeof(void *));
-				/* Initialise new slots to NULL (= uncached) */
-				memset(me->fn_cache + me->fn_cache_cap, 0,
-				       (new_cap - me->fn_cache_cap) * sizeof(void *));
-				me->fn_cache_cap = new_cap;
-			}
-			if (me->fn_cache[hook_id] == NULL) {
-				void *sym = dlsym(me->handle, ctx->adapter->name);
-				me->fn_cache[hook_id] = sym ? sym : NDX_FN_NOT_FOUND;
-			}
-			cb = (me->fn_cache[hook_id] == NDX_FN_NOT_FOUND)
-			     ? NULL : me->fn_cache[hook_id];
-		} else {
-			/* Hook ID unknown (registered after module load?) — fall back */
-			cb = dlsym(me->handle, ctx->adapter->name);
-		}
-
-		if (!cb) continue;
-
-		/* Use cached ndx_t* and region_entry — no hash lookups needed */
 		ndx_t *indx = me->indx;
 		if (!indx) continue;
+
+		void *cb = dlsym(me->handle, ctx->adapter->name);
+		if (!cb) continue;
+
 		indx->adapter = ctx->adapter;
 		indx->region_state = me->region_state;
 
 		uint64_t region_changed = (indx->region_id != ndx_current_region_id);
 		uint64_t            prev_rid    = ndx_current_region_id;
 		ndx_region_entry_t *prev_rentry = ndx_current_region;
-		if (__builtin_expect(region_changed, 0))
+		if (unlikely(region_changed))
 			set_current_region(indx->region_id, me->region_entry);
 
 		ctx->adapter->call(ret, cb, args);
-		(*ctx->ran_out)++;
-		memcpy(ctx->adapter->ret, ret, ctx->adapter->ret_size);
 
-		if (__builtin_expect(region_changed, 0))
+		if (unlikely(region_changed))
 			set_current_region(prev_rid, prev_rentry);
+
+		(*ctx->ran_out)++;
+		/* Middleware may read/write adapter->ret between modules — commit
+		 * each iteration so observer state stays synchronized. */
+		memcpy(ctx->adapter->ret, ret, ctx->adapter->ret_size);
 	}
 }
 
-int
+static void __attribute__((cold, noinline))
+ndx_warn_pledge_root(const char *caller, const char *name, const char *owner)
+{
+	WARN("ndx_call: pledge violation — '%s' called '%s' (owner: '%s')\n",
+		caller ? caller : "(unknown)", name, owner);
+}
+
+static void __attribute__((cold, noinline))
+ndx_warn_pledge_region(const char *caller, const char *name,
+                       unsigned long long rid, const char *owner)
+{
+	WARN("ndx_call: pledge violation — '%s' called '%s' in region %llu"
+	     " (owner: '%s')\n",
+	     caller ? caller : "(unknown)", name, rid, owner);
+}
+
+int __attribute__((hot, flatten))
 ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 {
 	uint64_t region_id = ndx_current_region_id;
-	if (__builtin_expect(!ndx_inited, 0))
+	if (unlikely(!ndx_inited))
 		ndx_init_once();
 
 	if (!reg) {
@@ -1341,14 +1355,13 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 	 * 1. Root-scoped pledge check (skipped when no pledges registered).
 	 *    Caller identity is only written to TLS when actually needed.
 	 * ------------------------------------------------------------------ */
-	if (__builtin_expect(ndx_pledge_count > 0, 0)) {
+	if (unlikely(ndx_pledge_count > 0)) {
 		ndx_current_caller = caller;
 		const char *global_pledge_owner = qmap_ptr(qmap_get(pledge_hd, reg->name));
 		if (global_pledge_owner) {
 			const char *caller = ndx_current_caller;
 			if (!caller || strcmp(caller, global_pledge_owner) != 0) {
-				WARN("ndx_call: pledge violation — '%s' called '%s' (owner: '%s')\n",
-					caller ? caller : "(unknown)", reg->name, global_pledge_owner);
+				ndx_warn_pledge_root(caller, reg->name, global_pledge_owner);
 				NDX_SET_ERR(NDX_ERR_EPERM);
 				return NDX_ERR_EPERM;
 			}
@@ -1365,7 +1378,7 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 	 * to do any further work — no ancestor walk required on the clean path.
 	 * ------------------------------------------------------------------ */
 	ndx_region_entry_t *caller_region_entry = ndx_current_region;
-	if (__builtin_expect(!caller_region_entry, 0))
+	if (unlikely(!caller_region_entry))
 		caller_region_entry = region_lookup(region_id);
 
 	int has_deny_pledge   = caller_region_entry &&
@@ -1378,18 +1391,18 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 	ndx_region_entry_t *anc_chain[65];
 	int anc_n = 0;
 
-	if (__builtin_expect(has_deny_pledge | has_interceptors, 0)) {
+	if (unlikely(has_deny_pledge | has_interceptors)) {
 		if (caller_region_entry)
 			anc_n = region_ancestor_chain(caller_region_entry, anc_chain, 65);
 	}
 
-	if (__builtin_expect(has_deny_pledge, 0)) {
+	if (unlikely(has_deny_pledge)) {
 		/* Caller identity needed for pledge checks in this branch */
 		ndx_current_caller = caller;
 		for (int i = 0; i < anc_n; i++) {
 			/* Denied hook? Fires for any call into the denying region or its descendants. */
-			for (ndx_deny_entry_t *e = anc_chain[i]->denied_hooks; e; e = e->next) {
-				if (strcmp(e->value, reg->name) != 0) continue;
+			if (anc_chain[i]->denied_hooks_set &&
+			    qmap_get(anc_chain[i]->denied_hooks_set, reg->name)) {
 				NDX_SET_ERR(NDX_ERR_EPERM);
 				return NDX_ERR_EPERM;
 			}
@@ -1399,9 +1412,7 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 					qmap_ptr(qmap_get(anc_chain[i]->pledge_hd, reg->name));
 				if (rp_owner) {
 					if (!caller || strcmp(caller, rp_owner) != 0) {
-						WARN("ndx_call: pledge violation — '%s' called"
-						     " '%s' in region %llu (owner: '%s')\n",
-						     caller ? caller : "(unknown)", reg->name,
+						ndx_warn_pledge_region(caller, reg->name,
 						     (unsigned long long)anc_chain[i]->id, rp_owner);
 						NDX_SET_ERR(NDX_ERR_EPERM);
 						return NDX_ERR_EPERM;
@@ -1419,7 +1430,7 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 	 *    id back so subsequent calls are O(1).
 	 * ------------------------------------------------------------------ */
 	int hook_id = reg->hook_id;
-	if (__builtin_expect(hook_id < 0, 0)) {
+	if (unlikely(hook_id < 0)) {
 		const void *hid_v = qmap_get(hook_id_hd, reg->name);
 		if (!hid_v) {
 			NDX_SET_ERR(NDX_ERR_NOTFOUND);
@@ -1436,11 +1447,12 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 				reg->arg_size = canonical->arg_size;
 			}
 		}
-	}
-
-	if (reg->ret_size > NDX_MAX_RET_SIZE) {
-		NDX_SET_ERR(NDX_ERR_TOOBIG);
-		return NDX_ERR_TOOBIG;
+		/* Bounds-check on first resolve only — ret_size doesn't change
+		 * after registration, so subsequent hot-path calls skip this. */
+		if (unlikely(reg->ret_size > NDX_MAX_RET_SIZE)) {
+			NDX_SET_ERR(NDX_ERR_TOOBIG);
+			return NDX_ERR_TOOBIG;
+		}
 	}
 
 	/* ------------------------------------------------------------------
@@ -1457,7 +1469,21 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 	 * ------------------------------------------------------------------ */
 	int pre_err = NDX_GET_ERR();
 
-	if (__builtin_expect(!has_interceptors, 1)) {
+	/* Resolve dispatch call pointer into a stack local so nested ndx_call
+	 * invocations (from module bodies) cannot clobber what we dispatch.
+	 * ndx_last_adapter is __thread TLS shared across all nested calls on
+	 * this thread; using it as the dispatch vtable mid-loop is unsafe. */
+	void (*dispatch_call)(void *, void *, void *) = reg->call;
+	if (unlikely(!dispatch_call && hook_id >= 0 && hook_id < ndx_adapter_by_id_cap)) {
+		const ndx_adapter_t *canonical = ndx_adapter_by_id[hook_id];
+		if (canonical) dispatch_call = canonical->call;
+	}
+	if (unlikely(!dispatch_call)) {
+		NDX_SET_ERR(NDX_ERR_NOTFOUND);
+		return NDX_ERR_NOTFOUND;
+	}
+
+	if (likely(!has_interceptors)) {
 		/* ---- Fast path: inline DFS dispatch (no interceptors) ---- */
 		unsigned ran = 0;
 
@@ -1465,7 +1491,7 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 		 * during module execution (modules may call ndx.last() mid-dispatch).
 		 * Skip the 88-byte metadata copy when the hook hasn't changed since
 		 * the last call — reg pointer identity suffices as a cache key. */
-		if (__builtin_expect(reg != ndx_last_reg, 0)) {
+		if (unlikely(reg != ndx_last_reg)) {
 			memcpy(&ndx_last_adapter, reg, offsetof(ndx_adapter_t, ret));
 			ndx_last_reg = reg;
 		}
@@ -1482,61 +1508,50 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 
 				for (ndx_mod_entry_t *me = (ndx_mod_entry_t *)rn->mods_head;
 				     me; me = me->region_next) {
+					/* Prefetch next module's hot cache line (indx, region_next,
+					 * fn_cache pointer all live in the first 64 B per papi.h). */
+					if (me->region_next)
+						__builtin_prefetch(me->region_next, 0, 1);
 					if (!me->indx) continue;
 
 					/* Module-denied check (only when subtree has denies) */
-					if (__builtin_expect(has_deny_pledge, 0)) {
+					if (unlikely(has_deny_pledge)) {
 						int denied = 0;
 						const char *mpath = me->indx->module_path;
-						for (int i = 0; i < anc_n && !denied; i++)
-							if (deny_list_contains(anc_chain[i]->denied_modules, mpath))
+						for (int i = 0; i < anc_n && !denied; i++) {
+							unsigned s = anc_chain[i]->denied_modules_set;
+							if (s && qmap_get(s, mpath))
 								denied = 1;
+						}
 						if (denied) continue;
 					}
 
-					/* Resolve function pointer via fn_cache */
-					void *cb = NULL;
-					if (__builtin_expect(hook_id >= 0, 1)) {
-						if (hook_id >= me->fn_cache_cap) {
-							int new_cap = hook_id + 16;
-							me->fn_cache = realloc(me->fn_cache, new_cap * sizeof(void *));
-							memset(me->fn_cache + me->fn_cache_cap, 0,
-							       (new_cap - me->fn_cache_cap) * sizeof(void *));
-							me->fn_cache_cap = new_cap;
-						}
-						if (me->fn_cache[hook_id] == NULL) {
-							void *sym = dlsym(me->handle, reg->name);
-							me->fn_cache[hook_id] = sym ? sym : NDX_FN_NOT_FOUND;
-						}
-						cb = (me->fn_cache[hook_id] == NDX_FN_NOT_FOUND)
-						     ? NULL : me->fn_cache[hook_id];
-					} else {
-						cb = dlsym(me->handle, reg->name);
-					}
+					ndx_t *indx = me->indx;
+					void *cb = dlsym(me->handle, reg->name);
+					if (!cb) continue;
 
-				if (!cb) continue;
+					indx->adapter = &ndx_last_adapter;
+					indx->region_state = me->region_state;
 
-				ndx_t *indx = me->indx;
-				indx->adapter = &ndx_last_adapter;
-				indx->region_state = me->region_state;
+					uint64_t region_changed =
+						(indx->region_id != ndx_current_region_id);
+					uint64_t            prev_rid    = ndx_current_region_id;
+					ndx_region_entry_t *prev_rentry = ndx_current_region;
+					if (unlikely(region_changed))
+						set_current_region(indx->region_id, me->region_entry);
 
-				uint64_t region_changed = (indx->region_id != ndx_current_region_id);
-				uint64_t            prev_rid    = ndx_current_region_id;
-				ndx_region_entry_t *prev_rentry = ndx_current_region;
-				if (__builtin_expect(region_changed, 0))
-					set_current_region(indx->region_id, me->region_entry);
+					dispatch_call(retp, cb, arg);
 
-				reg->call(retp, cb, arg);
-				ran++;
+					if (unlikely(region_changed))
+						set_current_region(prev_rid, prev_rentry);
 
-				if (__builtin_expect(region_changed, 0))
-					set_current_region(prev_rid, prev_rentry);
+					ran++;
+				}
+
+				for (ndx_region_entry_t *ch = (ndx_region_entry_t *)rn->children_head;
+				     ch && stk_top < 65; ch = (ndx_region_entry_t *)ch->sibling_next)
+					stk[stk_top++] = ch;
 			}
-
-			for (ndx_region_entry_t *ch = (ndx_region_entry_t *)rn->children_head;
-			     ch && stk_top < 65; ch = (ndx_region_entry_t *)ch->sibling_next)
-				stk[stk_top++] = ch;
-		}
 		}
 
 		/* Commit ran and final ret value to ndx_last_adapter (metadata already set above) */
@@ -1561,12 +1576,16 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 
 				for (ndx_mod_entry_t *me = (ndx_mod_entry_t *)rn->mods_head;
 				     me; me = me->region_next) {
+					if (me->region_next)
+						__builtin_prefetch(me->region_next, 0, 1);
 					if (!me->indx) continue;
 					int denied = 0;
 					const char *mpath = me->indx->module_path;
-					for (int i = 0; i < anc_n && !denied; i++)
-						if (deny_list_contains(anc_chain[i]->denied_modules, mpath))
+					for (int i = 0; i < anc_n && !denied; i++) {
+						unsigned s = anc_chain[i]->denied_modules_set;
+						if (s && qmap_get(s, mpath))
 							denied = 1;
+					}
 					if (!denied && entry_count < total_mods)
 						entries[entry_count++] = me;
 				}
@@ -1601,6 +1620,10 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 		ndx_adapter_t adapter;
 		memcpy(&adapter, reg, offsetof(ndx_adapter_t, ret));
 		adapter.ran = 0;
+		/* Ensure adapter.call is populated even when caller passed a DECL
+		 * stub whose .call is NULL — dispatch_next invokes ctx->adapter->call. */
+		if (unlikely(!adapter.call))
+			adapter.call = dispatch_call;
 
 		ndx_dispatch_ctx_t ctx = {
 			.chain        = ic_chain,
@@ -1612,12 +1635,18 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 			.entries      = entries,
 			.entry_count  = entry_count,
 			.hook_id      = hook_id,
+			.abort_err    = 0,
 		};
 
 		dispatch_next(arg, retp, &ctx);
 
+		if (unlikely(ctx.abort_err)) {
+			NDX_SET_ERR(ctx.abort_err);
+			return ctx.abort_err;
+		}
+
 		/* Commit to ndx_last_adapter — only copy metadata if hook changed */
-		if (__builtin_expect(reg != ndx_last_reg, 0)) {
+		if (unlikely(reg != ndx_last_reg)) {
 			memcpy(&ndx_last_adapter, reg, offsetof(ndx_adapter_t, ret));
 			ndx_last_reg = reg;
 		}
@@ -1655,8 +1684,13 @@ ndx_areg(char *name, ndx_adapter_t *adapter)
 	/* Grow adapter-by-id array and store pointer */
 	if (hook_id >= ndx_adapter_by_id_cap) {
 		int new_cap = hook_id + 16;
-		ndx_adapter_by_id = realloc(ndx_adapter_by_id,
-		                            new_cap * sizeof(ndx_adapter_t *));
+		ndx_adapter_t **tmp = realloc(ndx_adapter_by_id,
+		                              new_cap * sizeof(ndx_adapter_t *));
+		if (unlikely(!tmp)) {
+			NDX_SET_ERR(NDX_ERR_INVALID);
+			return NDX_ERR_INVALID;
+		}
+		ndx_adapter_by_id = tmp;
 		memset(ndx_adapter_by_id + ndx_adapter_by_id_cap, 0,
 		       (new_cap - ndx_adapter_by_id_cap) * sizeof(ndx_adapter_t *));
 		ndx_adapter_by_id_cap = new_cap;
@@ -1717,10 +1751,10 @@ shared_init(void)
 	ndx.reload           = ndx_reload;
 }
 
-static void
+static void __attribute__((cold))
 ndx_init_once(void)
 {
-	if (ndx_inited)
+	if (likely(ndx_inited))
 		return;
 	ndx_inited = 1;
 

@@ -147,6 +147,18 @@ ${TEST_DIR}/mods/mod_region_state.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_region
 	${cc} -o $@ ${TEST_DIR}/mods/mod_region_state.c ${CFLAGS} ${TEST_CFLAGS} \
 		-fPIC -shared ${LDFLAGS} -lndx ${LDLIBS-libndx}
 
+${TEST_DIR}/mods/mod_ptr_args.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_ptr_args.c lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/mods/mod_ptr_args.c ${CFLAGS} ${TEST_CFLAGS} \
+		-fPIC -shared ${LDFLAGS} -lndx ${LDLIBS-libndx}
+
+${TEST_DIR}/mods/mod_ptr_args_caller.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_ptr_args_caller.c lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/mods/mod_ptr_args_caller.c ${CFLAGS} ${TEST_CFLAGS} \
+		-fPIC -shared ${LDFLAGS} -lndx ${LDLIBS-libndx}
+
+${TEST_DIR}/test_ptr_args${EXE}: ${TEST_DIR} ${TEST_DIR}/test_ptr_args.c lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/test_ptr_args.c ${CFLAGS} ${TEST_CFLAGS} \
+		${LDFLAGS} -lndx ${LDLIBS-libndx} ${TEST_LDFLAGS}
+
 ${TEST_DIR}/test_region_state${EXE}: ${TEST_DIR} ${TEST_DIR}/test_region_state.c lib/libndx.${SO}
 	${cc} -o $@ ${TEST_DIR}/test_region_state.c ${CFLAGS} ${TEST_CFLAGS} \
 		${LDFLAGS} -lndx ${LDLIBS-libndx} ${TEST_LDFLAGS}
@@ -228,7 +240,9 @@ TEST_MODS := ${TEST_DIR}/test_mod.${SO} \
 	${TEST_DIR}/mods/mod_cascade_deep_a.${SO} \
 	${TEST_DIR}/mods/mod_cascade_deep_b.${SO} \
 	${TEST_DIR}/mods/mod_cascade_deep_c.${SO} \
-	${TEST_DIR}/mods/mod_region_state.${SO}
+	${TEST_DIR}/mods/mod_region_state.${SO} \
+	${TEST_DIR}/mods/mod_ptr_args.${SO} \
+	${TEST_DIR}/mods/mod_ptr_args_caller.${SO}
 
 TEST_BINS := ${TEST_DIR}/test_core${EXE} \
 	${TEST_DIR}/test_errors${EXE} \
@@ -242,7 +256,8 @@ TEST_BINS := ${TEST_DIR}/test_core${EXE} \
 	${TEST_DIR}/test_region${EXE} \
 	${TEST_DIR}/test_game${EXE} \
 	${TEST_DIR}/test_unload${EXE} \
-	${TEST_DIR}/test_region_state${EXE}
+	${TEST_DIR}/test_region_state${EXE} \
+	${TEST_DIR}/test_ptr_args${EXE}
 
 test-build: lib/libndx.${SO} ${TEST_MODS} ${TEST_BINS}
 
@@ -273,4 +288,6 @@ test: test-build
 	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_unload
 	@echo "Running test_region_state..."
 	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_region_state
+	@echo "Running test_ptr_args..."
+	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_ptr_args
 	@echo "All tests passed!"
