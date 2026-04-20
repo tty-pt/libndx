@@ -66,10 +66,14 @@ typedef struct ndx_region_entry {
 
 	/* Cached flags — set whenever the corresponding field becomes non-NULL/non-zero.
 	 * Propagated upward through the ancestor chain so ndx_call can skip the
-	 * region_ancestor_chain walk entirely when the subtree is clean. */
-	uint8_t                   subtree_has_deny;        /* any deny_hooks/deny_modules in subtree */
-	uint8_t                   subtree_has_pledge;      /* any pledge_hd in subtree */
-	uint8_t                   subtree_has_interceptors;/* any interceptors in subtree */
+	 * region_ancestor_chain walk entirely when the subtree is clean.
+	 * Packed into one byte so the hot-path check is a single load + AND. */
+	uint8_t                   subtree_flags;
+#define NDX_SUBTREE_HAS_DENY         0x01u
+#define NDX_SUBTREE_HAS_PLEDGE       0x02u
+#define NDX_SUBTREE_HAS_INTERCEPTORS 0x04u
+#define NDX_SUBTREE_SECURITY_MASK    (NDX_SUBTREE_HAS_DENY | NDX_SUBTREE_HAS_PLEDGE)
+#define NDX_SUBTREE_ANY_MASK         (NDX_SUBTREE_HAS_DENY | NDX_SUBTREE_HAS_PLEDGE | NDX_SUBTREE_HAS_INTERCEPTORS)
 
 	ndx_claim_handler_fn_t   *claim_handler;
 	void                     *claim_handler_ud;

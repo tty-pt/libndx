@@ -212,21 +212,21 @@ static inline void
 region_propagate_deny(ndx_region_entry_t *entry)
 {
 	for (ndx_region_entry_t *e = entry; e; e = e->parent)
-		e->subtree_has_deny = 1;
+		e->subtree_flags |= NDX_SUBTREE_HAS_DENY;
 }
 
 static inline void
 region_propagate_pledge(ndx_region_entry_t *entry)
 {
 	for (ndx_region_entry_t *e = entry; e; e = e->parent)
-		e->subtree_has_pledge = 1;
+		e->subtree_flags |= NDX_SUBTREE_HAS_PLEDGE;
 }
 
 static inline void
 region_propagate_interceptors(ndx_region_entry_t *entry)
 {
 	for (ndx_region_entry_t *e = entry; e; e = e->parent)
-		e->subtree_has_interceptors = 1;
+		e->subtree_flags |= NDX_SUBTREE_HAS_INTERCEPTORS;
 }
 
 static void
@@ -1466,17 +1466,18 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 	if (unlikely(!caller_region_entry))
 		caller_region_entry = region_lookup(region_id);
 
-	int has_deny_pledge   = caller_region_entry &&
-	                        (caller_region_entry->subtree_has_deny ||
-	                         caller_region_entry->subtree_has_pledge);
-	int has_interceptors  = caller_region_entry &&
-	                         caller_region_entry->subtree_has_interceptors;
+	/* Single-byte subtree flag load — replaces three-field OR dance.
+	 * Common case: subtree is clean, flags==0, both checks fold to one
+	 * AND + jz away from the fast path. */
+	uint8_t sflags = caller_region_entry ? caller_region_entry->subtree_flags : 0;
+	int has_deny_pledge  = (sflags & NDX_SUBTREE_SECURITY_MASK) != 0;
+	int has_interceptors = (sflags & NDX_SUBTREE_HAS_INTERCEPTORS) != 0;
 
 	/* Ancestor chain — built lazily, only when security checks are needed */
 	ndx_region_entry_t *anc_chain[65];
 	int anc_n = 0;
 
-	if (unlikely(has_deny_pledge | has_interceptors)) {
+	if (unlikely(sflags & NDX_SUBTREE_ANY_MASK)) {
 		if (caller_region_entry)
 			anc_n = region_ancestor_chain(caller_region_entry, anc_chain, 65);
 	}
