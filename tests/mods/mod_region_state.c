@@ -10,8 +10,8 @@
 #include <ttypt/ndx-mod.h>
 #include <stdlib.h>
 
-NDX_DEF(int, rs_increment, int, dummy);
-NDX_DEF(int, rs_get,       int, dummy);
+NDX_LISTENER(int, rs_increment, int, dummy);
+NDX_LISTENER(int, rs_get,       int, dummy);
 
 NDX_REGION_STATE {
 	int counter;

@@ -4,9 +4,8 @@
  *
  * @section ndx_synopsis Synopsis
  * @code
- * NDX_DECL(int, on_tick, int, dt);
- * NDX_DEF(int, on_tick, int, dt);
- * call_on_tick(16);
+ * NDX_HOOK_DEF(int, on_tick, int, dt);
+ * on_tick(16);
  * @endcode
  *
  * @section ndx_overview Overview
@@ -15,17 +14,17 @@
  * - <b>Module</b> implements hooks in a shared library
  *
  * @section ndx_usage Usage
- * 1. Host uses NDX_DEF to define hook signatures
+ * 1. Host uses NDX_HOOK_DEF to define hook signatures
  * 2. Host loads modules via ndx_load()
- * 3. Modules use NDX_DEF to implement hooks they provide
+ * 3. Modules use NDX_LISTENER to implement hooks they provide
  * 4. Modules include ndx-mod.h
  *
  * @section ndx_deps Dependencies
  * Dependencies between modules are handled through the API:
- * - Common headers use NDX_DECL for shared hook signatures
- * - Implementing modules use NDX_DEF to define hooks
+ * - Common headers use NDX_HOOK_DECL for shared hook signatures
+ * - Implementing modules use NDX_LISTENER to define hooks
  * - Dependent modules call ndx_load() in ndx_install() to load dependencies
- * - Then use call_*() macros to invoke hooks from dependencies
+ * - Then call hooks as normal functions from dependencies
  *
  * @section ndx_errors Error Handling
  * - Functions return NDX_OK (0) on success or negative NDX_ERR_* on failure
@@ -48,13 +47,14 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include <ttypt/ndx-pp.h>
 #include <ttypt/qsys.h>
 
 /**
  * @brief Maximum size for return types in hooks.
  *
  * Return types larger than this will cause a compile-time static assertion
- * when using NDX_DEF.
+ * when using NDX_HOOK_DEF or NDX_LISTENER.
  */
 #define NDX_MAX_RET_SIZE 4096
 
@@ -102,7 +102,7 @@
  * @brief Adapter for dispatching hook calls to modules.
  *
  * This struct is used internally to route calls to all modules
- * that implement a given hook. Created automatically by NDX_DEF.
+ * that implement a given hook. Created automatically by NDX_LISTENER.
  */
 typedef struct {
 	/** @brief Name of the hook (e.g., "on_tick") */
@@ -118,7 +118,7 @@ typedef struct {
 	void (*call)(void *, void *, void *);
 
 	/** @brief Monotonic hook ID assigned by ndx_areg(); used for O(1) dispatch.
-	 *  Zero-initialised by NDX_DEF; filled in by ndx_areg() on first registration. */
+	 *  Zero-initialised by NDX_LISTENER; filled in by ndx_areg() on first registration. */
 	int hook_id;
 
 	/** @brief Buffer for last return value */
@@ -128,133 +128,7 @@ typedef struct {
 	unsigned ran;
 } ndx_adapter_t;
 
-#define CAT(a, ...) PRIMITIVE_CAT(a, __VA_ARGS__)
-#define PRIMITIVE_CAT(a, ...) a ## __VA_ARGS__
-
-#define NDX_PC(...) \
-			 PP_NARG_(__VA_ARGS__, PAIR_RSEQ_N())
-#define PP_NARG_(...) \
-	PP_ARG_N(__VA_ARGS__)
-
-#define PP_ARG_N( \
-		 _1,  _2,  _3,  _4,  _5,  _6,  _7,  _8, \
-			_9, _10, _11, _12, _13, _14, _15, _16, \
-		_17, _18, _19, _20, _21, _22, _23, _24, \
-			_25, _26, _27, _28, _29, _30, _31, _32, \
-		_33, _34, _35, _36, _37, _38, _39, _40, \
-		_41, _42, _43, _44, _45, _46, _47, _48, \
-		_49, _50, _51, _52, _53, _54, _55, _56, \
-		_57, _58, _59, _60, _61, _62, _63, N, ...) N
-
-#define PAIR_RSEQ_N() \
-	31,31,30,30,29,29,28,28,27,27,26,26,25,25, \
-	24,24,23,23,22,22,21,21,20,20,19,19,18,18, \
-	17,17,16,16,15,15,14,14,13,13,12,12,11,11, \
-	10,10, 9, 9, 8, 8, 7, 7, 6, 6, 5, 5, 4, 4, \
-	 3, 3, 2, 2, 1, 1, 0, 0
-
-#define NDX_FA(...) CAT(NDX_FA_, \
-		NDX_PC(__VA_ARGS__))( __VA_ARGS__)
-
-#define NDX_FA_1(a, b)        a b
-#define NDX_FA_2(a, b, ...)   a b, NDX_FA_1(__VA_ARGS__)
-#define NDX_FA_3(a, b, ...)   a b, NDX_FA_2(__VA_ARGS__)
-#define NDX_FA_4(a, b, ...)   a b, NDX_FA_3(__VA_ARGS__)
-#define NDX_FA_5(a, b, ...)   a b, NDX_FA_4(__VA_ARGS__)
-#define NDX_FA_6(a, b, ...)   a b, NDX_FA_5(__VA_ARGS__)
-#define NDX_FA_7(a, b, ...)   a b, NDX_FA_6(__VA_ARGS__)
-#define NDX_FA_8(a, b, ...)   a b, NDX_FA_7(__VA_ARGS__)
-#define NDX_FA_9(a, b, ...)   a b, NDX_FA_8(__VA_ARGS__)
-#define NDX_FA_10(a, b, ...)  a b, NDX_FA_9(__VA_ARGS__)
-#define NDX_FA_11(a, b, ...)  a b, NDX_FA_10(__VA_ARGS__)
-#define NDX_FA_12(a, b, ...)  a b, NDX_FA_11(__VA_ARGS__)
-#define NDX_FA_13(a, b, ...)  a b, NDX_FA_12(__VA_ARGS__)
-#define NDX_FA_14(a, b, ...)  a b, NDX_FA_13(__VA_ARGS__)
-#define NDX_FA_15(a, b, ...)  a b, NDX_FA_14(__VA_ARGS__)
-#define NDX_FA_16(a, b, ...)  a b, NDX_FA_15(__VA_ARGS__)
-
-#define NDX_PG(...) CAT(NDX_PG_, \
-		NDX_PC(__VA_ARGS__))( __VA_ARGS__)
-
-#define NDX_PG_1(a, b)        a b;
-#define NDX_PG_2(a, b, ...)   a b; NDX_PG_1(__VA_ARGS__)
-#define NDX_PG_3(a, b, ...)   a b; NDX_PG_2(__VA_ARGS__)
-#define NDX_PG_4(a, b, ...)   a b; NDX_PG_3(__VA_ARGS__)
-#define NDX_PG_5(a, b, ...)   a b; NDX_PG_4(__VA_ARGS__)
-#define NDX_PG_6(a, b, ...)   a b; NDX_PG_5(__VA_ARGS__)
-#define NDX_PG_7(a, b, ...)   a b; NDX_PG_6(__VA_ARGS__)
-#define NDX_PG_8(a, b, ...)   a b; NDX_PG_7(__VA_ARGS__)
-#define NDX_PG_9(a, b, ...)   a b; NDX_PG_8(__VA_ARGS__)
-#define NDX_PG_10(a, b, ...)  a b; NDX_PG_9(__VA_ARGS__)
-#define NDX_PG_11(a, b, ...)  a b; NDX_PG_10(__VA_ARGS__)
-#define NDX_PG_12(a, b, ...)  a b; NDX_PG_11(__VA_ARGS__)
-#define NDX_PG_13(a, b, ...)  a b; NDX_PG_12(__VA_ARGS__)
-#define NDX_PG_14(a, b, ...)  a b; NDX_PG_13(__VA_ARGS__)
-#define NDX_PG_15(a, b, ...)  a b; NDX_PG_14(__VA_ARGS__)
-#define NDX_PG_16(a, b, ...)  a b; NDX_PG_15(__VA_ARGS__)
-
-#define NDX_NA(...) CAT(NDX_NA_, \
-		NDX_PC(__VA_ARGS__))( __VA_ARGS__)
-
-#define NDX_NA_1(a, b)        args.b
-#define NDX_NA_2(a, b, ...)   args.b, NDX_NA_1(__VA_ARGS__)
-#define NDX_NA_3(a, b, ...)   args.b, NDX_NA_2(__VA_ARGS__)
-#define NDX_NA_4(a, b, ...)   args.b, NDX_NA_3(__VA_ARGS__)
-#define NDX_NA_5(a, b, ...)   args.b, NDX_NA_4(__VA_ARGS__)
-#define NDX_NA_6(a, b, ...)   args.b, NDX_NA_5(__VA_ARGS__)
-#define NDX_NA_7(a, b, ...)   args.b, NDX_NA_6(__VA_ARGS__)
-#define NDX_NA_8(a, b, ...)   args.b, NDX_NA_7(__VA_ARGS__)
-#define NDX_NA_9(a, b, ...)   args.b, NDX_NA_8(__VA_ARGS__)
-#define NDX_NA_10(a, b, ...)  args.b, NDX_NA_9(__VA_ARGS__)
-#define NDX_NA_11(a, b, ...)  args.b, NDX_NA_10(__VA_ARGS__)
-#define NDX_NA_12(a, b, ...)  args.b, NDX_NA_11(__VA_ARGS__)
-#define NDX_NA_13(a, b, ...)  args.b, NDX_NA_12(__VA_ARGS__)
-#define NDX_NA_14(a, b, ...)  args.b, NDX_NA_13(__VA_ARGS__)
-#define NDX_NA_15(a, b, ...)  args.b, NDX_NA_14(__VA_ARGS__)
-#define NDX_NA_16(a, b, ...)  args.b, NDX_NA_15(__VA_ARGS__)
-
-#define NDX_NP(...) CAT(NDX_NP_, \
-		NDX_PC(__VA_ARGS__))( __VA_ARGS__)
-
-#define NDX_NP_1(a, b)        __ndx_a->b
-#define NDX_NP_2(a, b, ...)   __ndx_a->b, NDX_NP_1(__VA_ARGS__)
-#define NDX_NP_3(a, b, ...)   __ndx_a->b, NDX_NP_2(__VA_ARGS__)
-#define NDX_NP_4(a, b, ...)   __ndx_a->b, NDX_NP_3(__VA_ARGS__)
-#define NDX_NP_5(a, b, ...)   __ndx_a->b, NDX_NP_4(__VA_ARGS__)
-#define NDX_NP_6(a, b, ...)   __ndx_a->b, NDX_NP_5(__VA_ARGS__)
-#define NDX_NP_7(a, b, ...)   __ndx_a->b, NDX_NP_6(__VA_ARGS__)
-#define NDX_NP_8(a, b, ...)   __ndx_a->b, NDX_NP_7(__VA_ARGS__)
-#define NDX_NP_9(a, b, ...)   __ndx_a->b, NDX_NP_8(__VA_ARGS__)
-#define NDX_NP_10(a, b, ...)  __ndx_a->b, NDX_NP_9(__VA_ARGS__)
-#define NDX_NP_11(a, b, ...)  __ndx_a->b, NDX_NP_10(__VA_ARGS__)
-#define NDX_NP_12(a, b, ...)  __ndx_a->b, NDX_NP_11(__VA_ARGS__)
-#define NDX_NP_13(a, b, ...)  __ndx_a->b, NDX_NP_12(__VA_ARGS__)
-#define NDX_NP_14(a, b, ...)  __ndx_a->b, NDX_NP_13(__VA_ARGS__)
-#define NDX_NP_15(a, b, ...)  __ndx_a->b, NDX_NP_14(__VA_ARGS__)
-#define NDX_NP_16(a, b, ...)  __ndx_a->b, NDX_NP_15(__VA_ARGS__)
-
-#define NDX_DA(...) CAT(NDX_DA_, \
-		NDX_PC(__VA_ARGS__))( __VA_ARGS__)
-
-#define NDX_DA_1(a, b)        b
-#define NDX_DA_2(a, b, ...)   b, NDX_DA_1(__VA_ARGS__)
-#define NDX_DA_3(a, b, ...)   b, NDX_DA_2(__VA_ARGS__)
-#define NDX_DA_4(a, b, ...)   b, NDX_DA_3(__VA_ARGS__)
-#define NDX_DA_5(a, b, ...)   b, NDX_DA_4(__VA_ARGS__)
-#define NDX_DA_6(a, b, ...)   b, NDX_DA_5(__VA_ARGS__)
-#define NDX_DA_7(a, b, ...)   b, NDX_DA_6(__VA_ARGS__)
-#define NDX_DA_8(a, b, ...)   b, NDX_DA_7(__VA_ARGS__)
-#define NDX_DA_9(a, b, ...)   b, NDX_DA_8(__VA_ARGS__)
-#define NDX_DA_10(a, b, ...)  b, NDX_DA_9(__VA_ARGS__)
-#define NDX_DA_11(a, b, ...)  b, NDX_DA_10(__VA_ARGS__)
-#define NDX_DA_12(a, b, ...)  b, NDX_DA_11(__VA_ARGS__)
-#define NDX_DA_13(a, b, ...)  b, NDX_DA_12(__VA_ARGS__)
-#define NDX_DA_14(a, b, ...)  b, NDX_DA_13(__VA_ARGS__)
-#define NDX_DA_15(a, b, ...)  b, NDX_DA_14(__VA_ARGS__)
-#define NDX_DA_16(a, b, ...)  b, NDX_DA_15(__VA_ARGS__)
-
-#define STR(x) #x
-#define XSTR(x) STR(x)
+typedef int ndx_scope_fn_t(void *ud);
 
 /**
  * @brief Module callback function type.
@@ -291,61 +165,110 @@ typedef void (*mod_cb_t)(void);
   #define AUTO_INIT __attribute__((used)) __attribute__((section(".init_array")))
 #endif
 
+#ifdef __NDX_CALLER_PATH_DEFINED__
+#define __NDX_HOOK_DISPATCH(retp, adapterp, argp) \
+	ndx.call((retp), (adapterp), (argp), ndx.module_path)
+#else
+#define __NDX_HOOK_DISPATCH(retp, adapterp, argp) \
+	ndx_call((retp), (adapterp), (argp), __ndx_caller_path__)
+#endif
+
 /**
- * @brief Declare a mod-callable function signature and call stubs.
+ * @brief Declare a hook that can be called like a normal function.
  *
- * Use this in common header files shared between modules, or in modules
- * that only need to call hooks without implementing them.
+ * This is the preferred declaration form for call sites that should read as
+ * ordinary C. The generated inline function still routes through NDX_CALL, so
+ * caller identity and the current execution region are preserved.
  *
- * Creates:
- * - \c fname##_t: Function typedef for the hook
- * - \c fname: Weak function symbol (optional implementation)
- * - \c struct fname##_args: Argument structure
- * - \c fname##_id: Adapter ID (set at runtime)
- * - \c call_##fname(): Typed call wrapper function
- *
- * @param ftype Return type (e.g., int, void)
- * @param fname Function name (e.g., on_tick)
- * @param ... Argument types and names (e.g., int, dt)
- *
- * Example:
- * @code
- * NDX_DECL(int, on_tick, int, dt);
- * // Creates: on_tick_t, struct on_tick_args, on_tick_id, call_on_tick(int)
- * @endcode
+ * Do not use this macro in the same translation unit that defines a listener
+ * for the same hook name with NDX_LISTENER; the listener should keep using
+ * NDX_LISTENER and dispatch recursively with NDX_CALL when needed.
  */
-/* the callee uses this to be called */
-#define NDX_DECL(ftype, fname, ...) \
+#define NDX_HOOK_DECL(ftype, fname, ...) \
 	typedef ftype fname##_t(NDX_FA(__VA_ARGS__)); \
-	fname##_t fname WEAK; \
 	struct fname##_args { \
 		NDX_PG(__VA_ARGS__) \
 	}; \
-	static ndx_adapter_t fname##_adapter = { \
+	static ndx_adapter_t __ndx_decl_##fname##_adapter = { \
 		.name = XSTR(fname), \
 		.arg_size = sizeof(struct fname##_args), \
 		.ret_size = sizeof(ftype), \
 		.hook_id = -1, \
 	}; \
 	static inline UNUSED \
-	ftype call_##fname(NDX_FA(__VA_ARGS__)) { \
+	ftype fname(NDX_FA(__VA_ARGS__)) { \
 		ftype ret; \
 		memset(&ret, 0, sizeof(ret)); \
-		NDX_CALL(&ret, fname, NDX_DA(__VA_ARGS__)); \
+		struct fname##_args args = { NDX_DA(__VA_ARGS__) }; \
+		__NDX_HOOK_DISPATCH(&ret, &__ndx_decl_##fname##_adapter, &args); \
 		return ret; \
-	}
+	} \
+	typedef int __ndx_hook_decl_##fname##_semicolon_eater_t
 
 /**
- * @brief Define a mod-callable function (hook).
+ * @brief Define the canonical adapter for a normal-function hook.
  *
- * Use this in modules that implement hooks. Allows the host to call
- * this function from loaded modules.
+ * Use NDX_HOOK_DECL in shared headers; use NDX_HOOK_DEF in the one
+ * translation unit that emits the canonical adapter. NDX_HOOK_DEF is
+ * self-sufficient in definition TUs and also provides the ordinary call
+ * syntax there.
+ */
+#define NDX_HOOK_DEF(ftype, fname, ...) \
+	typedef ftype fname##_t(NDX_FA(__VA_ARGS__)); \
+	struct fname##_args { \
+		NDX_PG(__VA_ARGS__) \
+	}; \
+	static ndx_adapter_t __ndx_decl_##fname##_adapter = { \
+		.name = XSTR(fname), \
+		.arg_size = sizeof(struct fname##_args), \
+		.ret_size = sizeof(ftype), \
+		.hook_id = -1, \
+	}; \
+	static inline UNUSED \
+	ftype fname(NDX_FA(__VA_ARGS__)) { \
+		ftype ret; \
+		memset(&ret, 0, sizeof(ret)); \
+		struct fname##_args args = { NDX_DA(__VA_ARGS__) }; \
+		__NDX_HOOK_DISPATCH(&ret, &__ndx_decl_##fname##_adapter, &args); \
+		return ret; \
+	} \
+	_Static_assert(sizeof(ftype) <= NDX_MAX_RET_SIZE, \
+		"return type too large for ndx_adapter_t"); \
+	void fname##_adapter_call(void *res, void *fn, void *arg) { \
+		fname##_t *cast_fn; \
+		if (!fn) { \
+			WARN("%s_adapter_call: '%s' wasn't defined\n", \
+				XSTR(fname), XSTR(fname)); \
+			return; \
+		} \
+		* (void **) &cast_fn = fn; \
+		struct fname##_args *__ndx_a = arg; (void)__ndx_a; \
+		ftype result = cast_fn(NDX_NP(__VA_ARGS__)); \
+		if (res) *(ftype *)res = result; \
+	} \
+	ndx_adapter_t fname##_adapter  __attribute__((visibility("default"))) = { \
+		.name = XSTR(fname), \
+		.arg_size = sizeof(struct fname##_args), \
+		.ret_size = sizeof(ftype), \
+		.call = &fname##_adapter_call, \
+		.hook_id = -1, \
+	}; \
+	void fname##_adapter_reg(void) { \
+		ndx_areg(XSTR(fname), &fname##_adapter); \
+	} \
+	AUTO_INIT \
+	void (*fname##_adapter_reg_p)(void) = fname##_adapter_reg
+
+/**
+ * @brief Define a module listener implementation for a hook.
+ *
+ * Use this in modules that implement hooks. The host dispatches to these
+ * listener functions when the matching hook is called.
  *
  * Creates:
  * - \c fname##_t: Function typedef
  * - \c fname: Function implementation (you provide this)
  * - \c fname##_id: Hook ID (set on registration)
- * - \c call_##fname(): Typed call wrapper
  *
  * The hook is auto-registered when the module loads.
  *
@@ -355,24 +278,17 @@ typedef void (*mod_cb_t)(void);
  *
  * Example:
  * @code
- * NDX_DEF(int, on_tick, int, dt);
+ * NDX_LISTENER(int, on_tick, int, dt);
  * int on_tick(int dt) { return dt + 1; }
  * @endcode
  */
-#define NDX_DEF(ftype, fname, ...) \
+#define NDX_LISTENER(ftype, fname, ...) \
 	typedef ftype fname##_t(NDX_FA(__VA_ARGS__)); \
 	fname##_t fname; \
 	struct fname##_args { \
 		NDX_PG(__VA_ARGS__) \
 	}; \
 	extern ndx_adapter_t fname##_adapter; \
-	static inline UNUSED \
-	ftype call_##fname(NDX_FA(__VA_ARGS__)) { \
-		ftype ret; \
-		memset(&ret, 0, sizeof(ret)); \
-		NDX_CALL(&ret, fname, NDX_DA(__VA_ARGS__)); \
-		return ret; \
-	} \
 	_Static_assert(sizeof(ftype) <= NDX_MAX_RET_SIZE, \
 		"return type too large for ndx_adapter_t"); \
 	fname##_t fname; \
@@ -554,6 +470,8 @@ typedef int ndx_require_claim_t(ndx_claim_handler_fn_t *fn, void *ud);
  */
 typedef int ndx_region_each_fn_t(uint64_t child_id, void *ud);
 typedef int ndx_region_each_t(ndx_region_each_fn_t *fn, void *ud);
+typedef int ndx_with_region_t(uint64_t region_id, ndx_scope_fn_t *fn, void *ud);
+typedef uint64_t ndx_current_region_t(void);
 
 ndx_areg_t   ndx_areg;
 ndx_call_t   ndx_call;
@@ -563,6 +481,8 @@ ndx_deny_t           ndx_deny;
 ndx_intercept_t      ndx_intercept;
 ndx_require_claim_t  ndx_require_claim;
 ndx_region_each_t    ndx_region_each;
+ndx_with_region_t    ndx_with_region;
+ndx_current_region_t ndx_current_region;
 
 /**
  * @brief Load or reload a module into the caller's current region.
@@ -678,6 +598,8 @@ struct ndx_ctx {
 	ndx_intercept_t       *intercept;
 	ndx_require_claim_t   *require_claim;
 	ndx_region_each_t     *region_each;
+	ndx_with_region_t     *with_region;
+	ndx_current_region_t  *current_region;
 	/* unload / reload */
 	ndx_unload_t          *unload;
 	ndx_reload_t          *reload;

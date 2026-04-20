@@ -5,7 +5,7 @@
 
 static char mod_path[256];
 
-NDX_DEF(int, thread_hook, int, val);
+NDX_HOOK_DEF(int, thread_hook, int, val);
 
 static void* load_thread(void *arg) {
 	(void)arg;
@@ -35,7 +35,7 @@ static void test_concurrent_load(void) {
 static void* call_thread(void *arg) {
 	(void)arg;
 	for (int i = 0; i < 100; i++) {
-		int result = call_thread_hook(i);
+		int result = thread_hook(i);
 		(void)result;
 	}
 	return NULL;
@@ -53,10 +53,10 @@ static void test_concurrent_call(void) {
 	printf("  test_concurrent_call: PASS\n");
 }
 
-NDX_DEF(int, t1_hook, int, x);
-NDX_DEF(int, t2_hook, int, x);
-NDX_DEF(int, t3_hook, int, x);
-NDX_DEF(int, t4_hook, int, x);
+NDX_HOOK_DEF(int, t1_hook, int, x);
+NDX_HOOK_DEF(int, t2_hook, int, x);
+NDX_HOOK_DEF(int, t3_hook, int, x);
+NDX_HOOK_DEF(int, t4_hook, int, x);
 
 static void* areg_thread(void *arg) {
 	int idx = *(int*)arg;

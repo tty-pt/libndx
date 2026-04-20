@@ -18,15 +18,16 @@ See [these instructions](https://github.com/tty-pt/ci/blob/main/docs/install.md#
 
 A hook is a named, typed function that any number of modules can implement. The host declares the hook's signature once; each module that wants to handle it provides an implementation. When the hook is called, all implementing modules run.
 
-### NDX_DECL vs NDX_DEF
+### `NDX_HOOK_DECL` vs `NDX_HOOK_DEF` vs `NDX_LISTENER`
 
-- **`NDX_DECL`** — goes in shared headers. Declares the hook signature and generates the `call_*` wrapper. Use it in any translation unit that needs to call the hook but does not implement it.
-- **`NDX_DEF`** — goes in `.c` files. Does everything `NDX_DECL` does, plus registers the adapter and provides the function body. The host must use `NDX_DEF` in at least one translation unit to allocate the adapter; modules use it to provide their implementation.
+- **`NDX_HOOK_DECL`** — goes in shared headers. Declares a hook that callers invoke as a normal function.
+- **`NDX_HOOK_DEF`** — goes in one host `.c` file. Emits the canonical adapter for that hook and provides the same normal-function call syntax in that translation unit.
+- **`NDX_LISTENER`** — goes in module `.c` files. Registers a module-side listener implementation for a hook.
 
 ### Host vs Module
 
-- The **host** is the main executable. It defines hooks with `NDX_DEF`, loads modules with `ndx_load`, and dispatches with `call_*`.
-- A **module** is a shared library (`.so`/`.dll`). It includes `<ttypt/ndx-mod.h>`, implements hooks with `NDX_DEF`, and exports `ndx_install()` which is called once on first load.
+- The **host** is the main executable. It defines hooks with `NDX_HOOK_DEF`, loads modules with `ndx_load`, and dispatches by calling the hook function directly.
+- A **module** is a shared library (`.so`/`.dll`). It includes `<ttypt/ndx-mod.h>`, implements hooks with `NDX_LISTENER`, and exports `ndx_install()` which is called once on first load.
 
 ### Regions
 
@@ -43,7 +44,7 @@ A module opts into having its own region by calling `ndx_claim(bits)` from `ndx_
 ```c
 #include <ttypt/ndx.h>
 
-NDX_DECL(int, on_damage, int, player_id, int, amount);
+NDX_HOOK_DECL(int, on_damage, int, player_id, int, amount);
 ```
 
 **Module** (`mods/combat_log.c`):
@@ -52,7 +53,7 @@ NDX_DECL(int, on_damage, int, player_id, int, amount);
 #include <ttypt/ndx-mod.h>
 #include "hooks.h"
 
-NDX_DEF(int, on_damage, int, player_id, int, amount)
+NDX_LISTENER(int, on_damage, int, player_id, int, amount)
 {
     printf("player %d took %d damage\n", player_id, amount);
     return 0;
@@ -66,12 +67,12 @@ void ndx_install(void) {}
 ```c
 #include "hooks.h"
 
-NDX_DEF(int, on_damage, int, player_id, int, amount);
+NDX_HOOK_DEF(int, on_damage, int, player_id, int, amount);
 
 int main(void)
 {
     ndx_load("mods/combat_log");
-    call_on_damage(1, 50);
+    on_damage(1, 50);
     ndx_shutdown();
     return 0;
 }
@@ -93,7 +94,7 @@ cc -o mods/combat_log.so mods/combat_log.c -fPIC -shared -lndx
 
 ### Macros
 
-#### `NDX_DECL(ftype, fname, type, name, ...)`
+#### `NDX_HOOK_DECL(ftype, fname, type, name, ...)`
 
 Declares a hook in a shared header. Generates:
 - `fname_t` — function typedef
@@ -102,18 +103,26 @@ Declares a hook in a shared header. Generates:
 Parameters alternate as `type, name` pairs. At least one pair is required.
 
 ```c
-NDX_DECL(int, on_tick, int, dt);
+NDX_HOOK_DECL(int, on_tick, int, dt);
 // Generates: call_on_tick(int dt)
 ```
 
-#### `NDX_DEF(ftype, fname, type, name, ...)`
+#### `NDX_HOOK_DEF(ftype, fname, type, name, ...)`
 
-Defines a hook implementation. Generates everything `NDX_DECL` does, plus:
-- Registers the adapter automatically at startup (via `.init_array`)
-- Opens the function body — write the implementation immediately after
+Defines the canonical host-side hook adapter. The host calls the hook
+directly as a normal function.
 
 ```c
-NDX_DEF(int, on_tick, int, dt)
+NDX_HOOK_DEF(int, on_tick, int, dt);
+```
+
+#### `NDX_LISTENER(ftype, fname, type, name, ...)`
+
+Defines a module listener implementation. Registers the adapter automatically
+at startup (via `.init_array`) and opens the function body immediately after.
+
+```c
+NDX_LISTENER(int, on_tick, int, dt)
 {
     return dt * 2;
 }
@@ -128,7 +137,9 @@ int result;
 NDX_CALL(&result, on_tick, 16);
 ```
 
-In module context, use `call_fname(...)` instead; it routes through the injected `ndx` context and sets the caller identity correctly.
+In module context, hook calls use the normal function form as well; the
+generated inline dispatch routes through the injected `ndx` context and sets
+the caller identity correctly.
 
 ---
 
@@ -353,7 +364,7 @@ This example shows a moderator module that controls a child region, an intercept
 
 ```c
 #include <ttypt/ndx.h>
-NDX_DECL(int, on_tick, int, dt);
+NDX_HOOK_DECL(int, on_tick, int, dt);
 ```
 
 **Worker module** (`mods/worker.c`) — lives in the child region:
@@ -362,7 +373,7 @@ NDX_DECL(int, on_tick, int, dt);
 #include <ttypt/ndx-mod.h>
 #include "game_hooks.h"
 
-NDX_DEF(int, on_tick, int, dt)
+NDX_LISTENER(int, on_tick, int, dt)
 {
     printf("worker tick: dt=%d\n", dt);
     return dt;
@@ -416,7 +427,7 @@ void ndx_install(void)
 ```c
 #include "game_hooks.h"
 
-NDX_DEF(int, on_tick, int, dt);
+NDX_HOOK_DEF(int, on_tick, int, dt);
 
 int main(void)
 {

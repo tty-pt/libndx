@@ -107,10 +107,10 @@ static __thread void    *ndx_last_retp;
 static __thread const char *ndx_current_caller;
 
 /* Thread-local current region — id and a direct pointer kept in sync.
- * ndx_current_region may be NULL before the first ndx_init_once() call;
+ * ndx_current_region_entry may be NULL before the first ndx_init_once() call;
  * code that needs the entry must guard or call region_ensure_root() first. */
 static __thread uint64_t           ndx_current_region_id = NDX_REGION_ROOT;
-static __thread ndx_region_entry_t *ndx_current_region    = NULL;
+static __thread ndx_region_entry_t *ndx_current_region_entry = NULL;
 
 /* Thread-local pointer to the currently-loading module entry.
  * Set during ndx_install() so child ndx_load() calls can register their
@@ -122,7 +122,7 @@ static inline void
 set_current_region(uint64_t id, ndx_region_entry_t *entry)
 {
 	ndx_current_region_id = id;
-	ndx_current_region    = entry;
+	ndx_current_region_entry = entry;
 }
 
 /* -------------------------------------------------------------------------
@@ -326,8 +326,8 @@ region_ensure_root(void)
 		region_store(root);
 	}
 	/* Always sync the thread-local pointer to the current root entry */
-	if (!ndx_current_region || ndx_current_region_id == NDX_REGION_ROOT)
-		ndx_current_region = root;
+	if (!ndx_current_region_entry || ndx_current_region_id == NDX_REGION_ROOT)
+		ndx_current_region_entry = root;
 }
 
 /* -------------------------------------------------------------------------
@@ -719,6 +719,39 @@ int ndx_region_each(ndx_region_each_fn_t *fn, void *ud) {
 	return ret;
 }
 
+uint64_t
+ndx_current_region(void)
+{
+	ndx_init_once();
+	return ndx_current_region_id;
+}
+
+int
+ndx_with_region(uint64_t region_id, ndx_scope_fn_t *fn, void *ud)
+{
+	ndx_init_once();
+	if (!fn) {
+		NDX_SET_ERR(NDX_ERR_INVALID);
+		return NDX_ERR_INVALID;
+	}
+
+	ndx_region_entry_t *target = region_lookup(region_id);
+	if (!target) {
+		NDX_SET_ERR(NDX_ERR_NOTFOUND);
+		return NDX_ERR_NOTFOUND;
+	}
+
+	uint64_t prev_region_id = ndx_current_region_id;
+	ndx_region_entry_t *prev_region_entry = ndx_current_region_entry;
+	set_current_region(region_id, target);
+
+	int ret = fn(ud);
+
+	set_current_region(prev_region_id, prev_region_entry);
+	NDX_SET_ERR(ret == NDX_OK ? NDX_OK : ret);
+	return ret;
+}
+
 /* -------------------------------------------------------------------------
  * Module shutdown helpers
  * ------------------------------------------------------------------------- */
@@ -777,6 +810,8 @@ void _ndx_init(void *ptr, const char *fname,
 	indx->intercept        = ndx_intercept;
 	indx->require_claim    = ndx_require_claim;
 	indx->region_each      = ndx_region_each;
+	indx->with_region      = ndx_with_region;
+	indx->current_region   = ndx_current_region;
 	indx->unload           = ndx_unload;
 	indx->reload           = ndx_reload;
 }
@@ -876,7 +911,7 @@ int _mod_load(char *fname) {
 	/* Set thread-local region context for the duration of ndx_install so
 	 * any ndx_load() calls inside install inherit the correct region. */
 	uint64_t            prev_region_id    = ndx_current_region_id;
-	ndx_region_entry_t *prev_region_entry = ndx_current_region;
+	ndx_region_entry_t *prev_region_entry = ndx_current_region_entry;
 	const char         *prev_caller       = ndx_current_caller;
 
 	set_current_region(inherited_region_id, inherited_reg);
@@ -1461,7 +1496,7 @@ ndx_dispatch_module(ndx_mod_entry_t *me,
 
 	uint64_t region_changed = (indx->region_id != ndx_current_region_id);
 	uint64_t            prev_rid    = ndx_current_region_id;
-	ndx_region_entry_t *prev_rentry = ndx_current_region;
+	ndx_region_entry_t *prev_rentry = ndx_current_region_entry;
 	if (unlikely(region_changed))
 		set_current_region(indx->region_id, me->region_entry);
 
@@ -1558,10 +1593,10 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 	 * Each ndx_region_entry_t carries subtree_has_* flags that are set
 	 * whenever a deny/pledge/interceptor is registered anywhere in the
 	 * subtree rooted at that entry.  Reading three bytes off the caller's
-	 * cached region pointer (ndx_current_region) tells us whether we need
+	 * cached region pointer (ndx_current_region_entry) tells us whether we need
 	 * to do any further work — no ancestor walk required on the clean path.
 	 * ------------------------------------------------------------------ */
-	ndx_region_entry_t *caller_region_entry = ndx_current_region;
+	ndx_region_entry_t *caller_region_entry = ndx_current_region_entry;
 	if (unlikely(!caller_region_entry))
 		caller_region_entry = region_lookup(region_id);
 
@@ -1891,7 +1926,7 @@ ndx_shutdown(void)
 	qmap_close(mod_by_region_hd);
 	mod_by_region_hd = 0;
 	/* Reset thread-local region pointer — entries were freed above */
-	ndx_current_region    = NULL;
+	ndx_current_region_entry = NULL;
 	ndx_current_region_id = NDX_REGION_ROOT;
 	/* Reset TLS state for ndx.last() */
 	ndx_last_ran = 0;
@@ -1917,6 +1952,8 @@ shared_init(void)
 	ndx.intercept        = ndx_intercept;
 	ndx.require_claim    = ndx_require_claim;
 	ndx.region_each      = ndx_region_each;
+	ndx.with_region      = ndx_with_region;
+	ndx.current_region   = ndx_current_region;
 	ndx.unload           = ndx_unload;
 	ndx.reload           = ndx_reload;
 }

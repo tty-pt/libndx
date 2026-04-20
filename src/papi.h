@@ -165,6 +165,8 @@ typedef struct ndx_t_s {
 	ndx_intercept_t          *intercept;
 	ndx_require_claim_t      *require_claim;
 	ndx_region_each_t        *region_each;
+	ndx_with_region_t        *with_region;
+	ndx_current_region_t     *current_region;
 	/* unload / reload */
 	ndx_unload_t             *unload;
 	ndx_reload_t             *reload;

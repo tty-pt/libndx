@@ -1,0 +1,132 @@
+#ifndef NDX_PP_H
+#define NDX_PP_H
+
+#define CAT(a, ...) PRIMITIVE_CAT(a, __VA_ARGS__)
+#define PRIMITIVE_CAT(a, ...) a ## __VA_ARGS__
+
+#define NDX_PC(...) \
+			 PP_NARG_(__VA_ARGS__, PAIR_RSEQ_N())
+#define PP_NARG_(...) \
+	PP_ARG_N(__VA_ARGS__)
+
+#define PP_ARG_N( \
+		 _1,  _2,  _3,  _4,  _5,  _6,  _7,  _8, \
+			_9, _10, _11, _12, _13, _14, _15, _16, \
+		_17, _18, _19, _20, _21, _22, _23, _24, \
+			_25, _26, _27, _28, _29, _30, _31, _32, \
+		_33, _34, _35, _36, _37, _38, _39, _40, \
+		_41, _42, _43, _44, _45, _46, _47, _48, \
+		_49, _50, _51, _52, _53, _54, _55, _56, \
+		_57, _58, _59, _60, _61, _62, _63, N, ...) N
+
+#define PAIR_RSEQ_N() \
+	31,31,30,30,29,29,28,28,27,27,26,26,25,25, \
+	24,24,23,23,22,22,21,21,20,20,19,19,18,18, \
+	17,17,16,16,15,15,14,14,13,13,12,12,11,11, \
+	10,10, 9, 9, 8, 8, 7, 7, 6, 6, 5, 5, 4, 4, \
+	 3, 3, 2, 2, 1, 1, 0, 0
+
+#define NDX_FA(...) CAT(NDX_FA_, \
+		NDX_PC(__VA_ARGS__))( __VA_ARGS__)
+
+#define NDX_FA_1(a, b)        a b
+#define NDX_FA_2(a, b, ...)   a b, NDX_FA_1(__VA_ARGS__)
+#define NDX_FA_3(a, b, ...)   a b, NDX_FA_2(__VA_ARGS__)
+#define NDX_FA_4(a, b, ...)   a b, NDX_FA_3(__VA_ARGS__)
+#define NDX_FA_5(a, b, ...)   a b, NDX_FA_4(__VA_ARGS__)
+#define NDX_FA_6(a, b, ...)   a b, NDX_FA_5(__VA_ARGS__)
+#define NDX_FA_7(a, b, ...)   a b, NDX_FA_6(__VA_ARGS__)
+#define NDX_FA_8(a, b, ...)   a b, NDX_FA_7(__VA_ARGS__)
+#define NDX_FA_9(a, b, ...)   a b, NDX_FA_8(__VA_ARGS__)
+#define NDX_FA_10(a, b, ...)  a b, NDX_FA_9(__VA_ARGS__)
+#define NDX_FA_11(a, b, ...)  a b, NDX_FA_10(__VA_ARGS__)
+#define NDX_FA_12(a, b, ...)  a b, NDX_FA_11(__VA_ARGS__)
+#define NDX_FA_13(a, b, ...)  a b, NDX_FA_12(__VA_ARGS__)
+#define NDX_FA_14(a, b, ...)  a b, NDX_FA_13(__VA_ARGS__)
+#define NDX_FA_15(a, b, ...)  a b, NDX_FA_14(__VA_ARGS__)
+#define NDX_FA_16(a, b, ...)  a b, NDX_FA_15(__VA_ARGS__)
+
+#define NDX_PG(...) CAT(NDX_PG_, \
+		NDX_PC(__VA_ARGS__))( __VA_ARGS__)
+
+#define NDX_PG_1(a, b)        a b;
+#define NDX_PG_2(a, b, ...)   a b; NDX_PG_1(__VA_ARGS__)
+#define NDX_PG_3(a, b, ...)   a b; NDX_PG_2(__VA_ARGS__)
+#define NDX_PG_4(a, b, ...)   a b; NDX_PG_3(__VA_ARGS__)
+#define NDX_PG_5(a, b, ...)   a b; NDX_PG_4(__VA_ARGS__)
+#define NDX_PG_6(a, b, ...)   a b; NDX_PG_5(__VA_ARGS__)
+#define NDX_PG_7(a, b, ...)   a b; NDX_PG_6(__VA_ARGS__)
+#define NDX_PG_8(a, b, ...)   a b; NDX_PG_7(__VA_ARGS__)
+#define NDX_PG_9(a, b, ...)   a b; NDX_PG_8(__VA_ARGS__)
+#define NDX_PG_10(a, b, ...)  a b; NDX_PG_9(__VA_ARGS__)
+#define NDX_PG_11(a, b, ...)  a b; NDX_PG_10(__VA_ARGS__)
+#define NDX_PG_12(a, b, ...)  a b; NDX_PG_11(__VA_ARGS__)
+#define NDX_PG_13(a, b, ...)  a b; NDX_PG_12(__VA_ARGS__)
+#define NDX_PG_14(a, b, ...)  a b; NDX_PG_13(__VA_ARGS__)
+#define NDX_PG_15(a, b, ...)  a b; NDX_PG_14(__VA_ARGS__)
+#define NDX_PG_16(a, b, ...)  a b; NDX_PG_15(__VA_ARGS__)
+
+#define NDX_NA(...) CAT(NDX_NA_, \
+		NDX_PC(__VA_ARGS__))( __VA_ARGS__)
+
+#define NDX_NA_1(a, b)        args.b
+#define NDX_NA_2(a, b, ...)   args.b, NDX_NA_1(__VA_ARGS__)
+#define NDX_NA_3(a, b, ...)   args.b, NDX_NA_2(__VA_ARGS__)
+#define NDX_NA_4(a, b, ...)   args.b, NDX_NA_3(__VA_ARGS__)
+#define NDX_NA_5(a, b, ...)   args.b, NDX_NA_4(__VA_ARGS__)
+#define NDX_NA_6(a, b, ...)   args.b, NDX_NA_5(__VA_ARGS__)
+#define NDX_NA_7(a, b, ...)   args.b, NDX_NA_6(__VA_ARGS__)
+#define NDX_NA_8(a, b, ...)   args.b, NDX_NA_7(__VA_ARGS__)
+#define NDX_NA_9(a, b, ...)   args.b, NDX_NA_8(__VA_ARGS__)
+#define NDX_NA_10(a, b, ...)  args.b, NDX_NA_9(__VA_ARGS__)
+#define NDX_NA_11(a, b, ...)  args.b, NDX_NA_10(__VA_ARGS__)
+#define NDX_NA_12(a, b, ...)  args.b, NDX_NA_11(__VA_ARGS__)
+#define NDX_NA_13(a, b, ...)  args.b, NDX_NA_12(__VA_ARGS__)
+#define NDX_NA_14(a, b, ...)  args.b, NDX_NA_13(__VA_ARGS__)
+#define NDX_NA_15(a, b, ...)  args.b, NDX_NA_14(__VA_ARGS__)
+#define NDX_NA_16(a, b, ...)  args.b, NDX_NA_15(__VA_ARGS__)
+
+#define NDX_NP(...) CAT(NDX_NP_, \
+		NDX_PC(__VA_ARGS__))( __VA_ARGS__)
+
+#define NDX_NP_1(a, b)        __ndx_a->b
+#define NDX_NP_2(a, b, ...)   __ndx_a->b, NDX_NP_1(__VA_ARGS__)
+#define NDX_NP_3(a, b, ...)   __ndx_a->b, NDX_NP_2(__VA_ARGS__)
+#define NDX_NP_4(a, b, ...)   __ndx_a->b, NDX_NP_3(__VA_ARGS__)
+#define NDX_NP_5(a, b, ...)   __ndx_a->b, NDX_NP_4(__VA_ARGS__)
+#define NDX_NP_6(a, b, ...)   __ndx_a->b, NDX_NP_5(__VA_ARGS__)
+#define NDX_NP_7(a, b, ...)   __ndx_a->b, NDX_NP_6(__VA_ARGS__)
+#define NDX_NP_8(a, b, ...)   __ndx_a->b, NDX_NP_7(__VA_ARGS__)
+#define NDX_NP_9(a, b, ...)   __ndx_a->b, NDX_NP_8(__VA_ARGS__)
+#define NDX_NP_10(a, b, ...)  __ndx_a->b, NDX_NP_9(__VA_ARGS__)
+#define NDX_NP_11(a, b, ...)  __ndx_a->b, NDX_NP_10(__VA_ARGS__)
+#define NDX_NP_12(a, b, ...)  __ndx_a->b, NDX_NP_11(__VA_ARGS__)
+#define NDX_NP_13(a, b, ...)  __ndx_a->b, NDX_NP_12(__VA_ARGS__)
+#define NDX_NP_14(a, b, ...)  __ndx_a->b, NDX_NP_13(__VA_ARGS__)
+#define NDX_NP_15(a, b, ...)  __ndx_a->b, NDX_NP_14(__VA_ARGS__)
+#define NDX_NP_16(a, b, ...)  __ndx_a->b, NDX_NP_15(__VA_ARGS__)
+
+#define NDX_DA(...) CAT(NDX_DA_, \
+		NDX_PC(__VA_ARGS__))( __VA_ARGS__)
+
+#define NDX_DA_1(a, b)        b
+#define NDX_DA_2(a, b, ...)   b, NDX_DA_1(__VA_ARGS__)
+#define NDX_DA_3(a, b, ...)   b, NDX_DA_2(__VA_ARGS__)
+#define NDX_DA_4(a, b, ...)   b, NDX_DA_3(__VA_ARGS__)
+#define NDX_DA_5(a, b, ...)   b, NDX_DA_4(__VA_ARGS__)
+#define NDX_DA_6(a, b, ...)   b, NDX_DA_5(__VA_ARGS__)
+#define NDX_DA_7(a, b, ...)   b, NDX_DA_6(__VA_ARGS__)
+#define NDX_DA_8(a, b, ...)   b, NDX_DA_7(__VA_ARGS__)
+#define NDX_DA_9(a, b, ...)   b, NDX_DA_8(__VA_ARGS__)
+#define NDX_DA_10(a, b, ...)  b, NDX_DA_9(__VA_ARGS__)
+#define NDX_DA_11(a, b, ...)  b, NDX_DA_10(__VA_ARGS__)
+#define NDX_DA_12(a, b, ...)  b, NDX_DA_11(__VA_ARGS__)
+#define NDX_DA_13(a, b, ...)  b, NDX_DA_12(__VA_ARGS__)
+#define NDX_DA_14(a, b, ...)  b, NDX_DA_13(__VA_ARGS__)
+#define NDX_DA_15(a, b, ...)  b, NDX_DA_14(__VA_ARGS__)
+#define NDX_DA_16(a, b, ...)  b, NDX_DA_15(__VA_ARGS__)
+
+#define STR(x) #x
+#define XSTR(x) STR(x)
+
+#endif

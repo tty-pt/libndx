@@ -183,6 +183,10 @@ ${TEST_DIR}/test_region${EXE}: ${TEST_DIR} ${TEST_DIR}/test_region.c lib/libndx.
 	${cc} -o $@ ${TEST_DIR}/test_region.c ${CFLAGS} ${TEST_CFLAGS} \
 		${LDFLAGS} -lndx ${LDLIBS-libndx} ${TEST_LDFLAGS}
 
+${TEST_DIR}/test_fn_hook${EXE}: ${TEST_DIR} ${TEST_DIR}/test_fn_hook.c ${TEST_DIR}/fn_hook_hooks.h lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/test_fn_hook.c ${CFLAGS} ${TEST_CFLAGS} \
+		-I${TEST_DIR} ${LDFLAGS} -lndx ${LDLIBS-libndx} ${TEST_LDFLAGS}
+
 GAME_HOOKS := ${TEST_DIR}/game_hooks.h
 
 ${TEST_DIR}/mods/mod_game_world.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_game_world.c ${GAME_HOOKS} lib/libndx.${SO}
@@ -258,6 +262,7 @@ TEST_BINS := ${TEST_DIR}/test_core${EXE} \
 	${TEST_DIR}/test_get${EXE} \
 	${TEST_DIR}/test_pledge${EXE} \
 	${TEST_DIR}/test_region${EXE} \
+	${TEST_DIR}/test_fn_hook${EXE} \
 	${TEST_DIR}/test_game${EXE} \
 	${TEST_DIR}/test_unload${EXE} \
 	${TEST_DIR}/test_region_state${EXE} \
@@ -286,6 +291,8 @@ test: test-build
 	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_pledge
 	@echo "Running test_region..."
 	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_region
+	@echo "Running test_fn_hook..."
+	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_fn_hook
 	@echo "Running test_game..."
 	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_game
 	@echo "Running test_unload..."

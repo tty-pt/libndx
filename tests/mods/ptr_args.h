@@ -13,7 +13,7 @@
  *   mod_ptr_args_caller.c   (analog of poem.c) — no IMPL flag; sees DECL
  *                                                stubs for provider hooks.
  *                                                Its own ptr_resolve_remote
- *                                                is NDX_DEF'd locally (not
+ *                                                is NDX_LISTENER'd locally (not
  *                                                via this header) — mirrors
  *                                                poem.c's own hooks not
  *                                                being declared in auth.h.
@@ -25,10 +25,10 @@
 #include <ttypt/ndx.h>
 
 #ifndef PTR_ARGS_IMPL
-NDX_DECL(const char *, ptr_lookup,  const char *, token);
-NDX_DECL(int,          ptr_len,     const char *, s);
-NDX_DECL(int,          ptr_copy,    char *, dst, const char *, src, size_t, n);
-NDX_DECL(const char *, ptr_resolve, int, which);
+NDX_HOOK_DECL(const char *, ptr_lookup,  const char *, token);
+NDX_HOOK_DECL(int,          ptr_len,     const char *, s);
+NDX_HOOK_DECL(int,          ptr_copy,    char *, dst, const char *, src, size_t, n);
+NDX_HOOK_DECL(const char *, ptr_resolve, int, which);
 #endif /* !PTR_ARGS_IMPL */
 
 #endif /* PTR_ARGS_H */

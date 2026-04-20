@@ -115,6 +115,23 @@ ndx_mod_region_each_(struct ndx_ctx *_n, ndx_region_each_fn_t *fn, void *ud)
 { _n->set_caller(_n->module_path); return _n->region_each(fn, ud); }
 
 /**
+ * @brief Run @p fn with the caller's current region temporarily set to
+ * @p region_id.
+ *
+ * Nested hook calls inside @p fn inherit that region and still use the
+ * module's injected caller identity.
+ */
+#define ndx_with_region(region_id, fn, ud) \
+	ndx_mod_with_region_(&ndx, (region_id), (fn), (ud))
+static inline UNUSED int
+ndx_mod_with_region_(struct ndx_ctx *_n, uint64_t region_id,
+                     ndx_scope_fn_t *fn, void *ud)
+{ _n->set_caller(_n->module_path); return _n->with_region(region_id, fn, ud); }
+
+/** @brief Return the current execution region for this thread. */
+#define ndx_current_region() (ndx.current_region())
+
+/**
  * @brief Unload a module from the caller's current region.
  *
  * @param fname  Path passed to ndx_load() (without .so/.dll suffix)

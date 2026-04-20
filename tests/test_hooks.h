@@ -3,7 +3,7 @@
 
 #include <ttypt/ndx.h>
 
-NDX_DECL(int, get_counter, int, dummy);
-NDX_DECL(int, increment_counter, int, amount);
+NDX_HOOK_DECL(int, get_counter, int, dummy);
+NDX_HOOK_DECL(int, increment_counter, int, amount);
 
 #endif

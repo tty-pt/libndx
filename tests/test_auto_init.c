@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <ttypt/ndx.h>
 
-NDX_DEF(int, init_order_check, int, dummy);
+NDX_LISTENER(int, init_order_check, int, dummy);
 
 int init_order_check(int dummy) {
     return 0;

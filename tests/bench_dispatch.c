@@ -19,7 +19,7 @@
 #include <ttypt/ndx.h>
 #include "mods/ptr_args.h"
 
-NDX_DECL(const char *, ptr_resolve_remote, int, which);
+NDX_HOOK_DECL(const char *, ptr_resolve_remote, int, which);
 
 static int
 interceptor_trivial(const char *hook, void *args, void *ret,
@@ -44,12 +44,12 @@ static void
 bench_single(void)
 {
 	/* Warm: prime fn_cache, page cache. */
-	for (int i = 0; i < ITER_WARM; i++) (void)call_ptr_lookup("tok-alice");
+	for (int i = 0; i < ITER_WARM; i++) (void)ptr_lookup("tok-alice");
 
 	uint64_t t0 = now_ns();
 	const char *u;
 	for (int i = 0; i < ITER_MEASURE; i++) {
-		u = call_ptr_lookup("tok-alice");
+		u = ptr_lookup("tok-alice");
 	}
 	uint64_t t1 = now_ns();
 	(void)u;
@@ -61,15 +61,15 @@ static void
 bench_alternating(void)
 {
 	for (int i = 0; i < ITER_WARM; i++) {
-		(void)call_ptr_lookup("tok-alice");
-		(void)call_ptr_len("hi");
+		(void)ptr_lookup("tok-alice");
+		(void)ptr_len("hi");
 	}
 
 	uint64_t t0 = now_ns();
 	int sum = 0;
 	for (int i = 0; i < ITER_MEASURE / 2; i++) {
-		const char *u = call_ptr_lookup("tok-alice");
-		int n = call_ptr_len("hi");
+		const char *u = ptr_lookup("tok-alice");
+		int n = ptr_len("hi");
 		sum += (u != NULL) + n;
 	}
 	uint64_t t1 = now_ns();
@@ -82,12 +82,12 @@ bench_alternating(void)
 static void
 bench_nested(void)
 {
-	for (int i = 0; i < ITER_WARM; i++) (void)call_ptr_resolve(1);
+	for (int i = 0; i < ITER_WARM; i++) (void)ptr_resolve(1);
 
 	uint64_t t0 = now_ns();
 	const char *u;
 	for (int i = 0; i < ITER_MEASURE; i++) {
-		u = call_ptr_resolve(1);
+		u = ptr_resolve(1);
 	}
 	uint64_t t1 = now_ns();
 	(void)u;
@@ -98,12 +98,12 @@ bench_nested(void)
 static void
 bench_cross_module_nested(void)
 {
-	for (int i = 0; i < ITER_WARM; i++) (void)call_ptr_resolve_remote(1);
+	for (int i = 0; i < ITER_WARM; i++) (void)ptr_resolve_remote(1);
 
 	uint64_t t0 = now_ns();
 	const char *u;
 	for (int i = 0; i < ITER_MEASURE; i++) {
-		u = call_ptr_resolve_remote(1);
+		u = ptr_resolve_remote(1);
 	}
 	uint64_t t1 = now_ns();
 	(void)u;
@@ -119,12 +119,12 @@ bench_intercepted(void)
 	assert(rc == 0);
 
 	/* Warm */
-	for (int i = 0; i < ITER_WARM; i++) (void)call_ptr_len("warmup");
+	for (int i = 0; i < ITER_WARM; i++) (void)ptr_len("warmup");
 
 	uint64_t t0 = now_ns();
 	int sum = 0;
 	for (int i = 0; i < ITER_MEASURE; i++) {
-		int n = call_ptr_len("test");
+		int n = ptr_len("test");
 		sum += n;
 	}
 	uint64_t t1 = now_ns();

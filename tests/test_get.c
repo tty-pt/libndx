@@ -3,8 +3,8 @@
 #include <string.h>
 #include <ttypt/ndx.h>
 
-NDX_DEF(int, foo_hook, int, x);
-NDX_DEF(int, bar_hook, int, x);
+NDX_HOOK_DEF(int, foo_hook, int, x);
+NDX_HOOK_DEF(int, bar_hook, int, x);
 
 static void test_adapter_registered(void) {
     assert(strcmp(foo_hook_adapter.name, "foo_hook") == 0);

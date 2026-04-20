@@ -11,9 +11,7 @@
 #include <dlfcn.h>
 #include <stdio.h>
 #include <ttypt/ndx.h>
-
-NDX_DEF(int, rs_increment, int, dummy);
-NDX_DEF(int, rs_get,       int, dummy);
+#include "region_state_hooks.h"
 
 #define MOD_RS "tests/mods/mod_region_state"
 
@@ -37,8 +35,7 @@ static int permissive_handler(const char *path, uint8_t req,
 static void test_region_state_zeroed(void) {
 	assert(ndx_load(MOD_RS) == NDX_OK);
 
-	int v = -1;
-	NDX_CALL(&v, rs_get, 0);
+	int v = rs_get(0);
 	assert(v == 0);
 
 	printf("  test_region_state_zeroed: PASS\n");
@@ -64,13 +61,12 @@ static void test_region_state_independent(void) {
 	assert(ndx_load(MOD_RS) == NDX_OK);  /* child region B */
 
 	/* Increment once — both instances run, each increments its own counter */
-	int v = 0;
-	NDX_CALL(&v, rs_increment, 0);
+	int v = rs_increment(0);
 	/* Last module returned 1 (its counter went 0→1) */
 	assert(v == 1);
 
 	/* Increment again — both instances run again, each goes to 2 */
-	NDX_CALL(&v, rs_increment, 0);
+	v = rs_increment(0);
 	assert(v == 2);
 
 	/* If state were shared, one instance would have reached 4 and the other 0.

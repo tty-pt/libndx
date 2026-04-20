@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <ttypt/ndx.h>
 
-NDX_DEF(int, get_counter, int, dummy);
+NDX_LISTENER(int, get_counter, int, dummy);
 
 /* Helper: path without .so suffix */
 #define MOD_PATH         "tests/mods/mod_unload"

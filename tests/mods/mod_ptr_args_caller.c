@@ -16,10 +16,10 @@
 
 ndx_t ndx;
 
-/* ptr_resolve is this module's own NDX_DEF — but invokes ptr_lookup
+/* ptr_resolve is this module's own NDX_LISTENER — but invokes ptr_lookup
  * from module B via its own NDX_DECL adapter (ptr_lookup_adapter here
  * is a distinct static instance from the one in mod_ptr_args.so). */
-NDX_DEF(const char *, ptr_resolve_remote, int, which)
+NDX_LISTENER(const char *, ptr_resolve_remote, int, which)
 {
 	const char *key;
 	switch (which) {
@@ -28,7 +28,7 @@ NDX_DEF(const char *, ptr_resolve_remote, int, which)
 		case 3: key = "tok-carol"; break;
 		default: return NULL;
 	}
-	return call_ptr_lookup(key);
+	return ptr_lookup(key);
 }
 
 MODULE_API void ndx_install(void) {}

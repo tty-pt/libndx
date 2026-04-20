@@ -3,7 +3,7 @@
 #include <string.h>
 #include <ttypt/ndx.h>
 
-NDX_DEF(int, test_hook, int, a, int, b);
+NDX_HOOK_DEF(int, test_hook, int, a, int, b);
 
 static void test_adapter_reg_sets_id(void) {
 	assert(test_hook_adapter.name[0] != '\0');
@@ -11,7 +11,7 @@ static void test_adapter_reg_sets_id(void) {
 }
 
 static void test_call_no_mods(void) {
-	int result = call_test_hook(5, 3);
+	int result = test_hook(5, 3);
 	assert(result == 0);
 	printf("  test_call_no_mods: PASS\n");
 }

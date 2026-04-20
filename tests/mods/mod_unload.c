@@ -7,7 +7,7 @@
  */
 #include <ttypt/ndx-mod.h>
 
-NDX_DEF(int, get_counter, int, dummy);
+NDX_LISTENER(int, get_counter, int, dummy);
 
 static int call_count = 0;
 

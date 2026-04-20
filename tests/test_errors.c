@@ -3,7 +3,7 @@
 #include <string.h>
 #include <ttypt/ndx.h>
 
-NDX_DEF(int, dummy_hook, int, x);
+NDX_HOOK_DEF(int, dummy_hook, int, x);
 
 static void test_load_missing(void) {
 	int ret = ndx_load("./tests/nonexistent_mod.so");
@@ -32,7 +32,7 @@ static void test_errno_persists(void) {
 	ndx_load("./tests/nonexistent.so");
 	assert(ndx_errno() == NDX_ERR_NOTFOUND);
 	assert(dummy_hook_adapter.name[0] != '\0');
-	int result = call_dummy_hook(42);
+	int result = dummy_hook(42);
 	(void)result;
 	assert(ndx_errno() == NDX_OK);
 	printf("  test_errno_persists: PASS\n");

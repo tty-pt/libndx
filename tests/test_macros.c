@@ -5,13 +5,13 @@
 
 static char mod_path[256];
 
-NDX_DEF(int, multi_arg, int, a, int, b, int, c, int, d, int, e, int, f, int, g, int, h);
+NDX_HOOK_DEF(int, multi_arg, int, a, int, b, int, c, int, d, int, e, int, f, int, g, int, h);
 
 static void test_multi_args(void) {
 	int ret = ndx_load(mod_path);
 	assert(ret == NDX_OK);
 	
-	int result = call_multi_arg(1, 2, 3, 4, 5, 6, 7, 8);
+	int result = multi_arg(1, 2, 3, 4, 5, 6, 7, 8);
 	assert(result == 36);
 	printf("  test_multi_args: PASS\n");
 }
@@ -21,22 +21,22 @@ typedef struct {
 	int y;
 } point_t;
 
-NDX_DEF(point_t, struct_hook, int, x, int, y);
+NDX_HOOK_DEF(point_t, struct_hook, int, x, int, y);
 
 static void test_struct_return(void) {
 	int ret = ndx_load(mod_path);
 	assert(ret == NDX_OK);
 	
-	point_t p = call_struct_hook(10, 20);
+	point_t p = struct_hook(10, 20);
 	assert(p.x == 10);
 	assert(p.y == 20);
 	printf("  test_struct_return: PASS\n");
 }
 
-NDX_DEF(int, one_arg, int, a);
-NDX_DEF(int, two_args, int, a, int, b);
-NDX_DEF(int, four_args, int, a, int, b, int, c, int, d);
-NDX_DEF(int, eight_args, int, a, int, b, int, c, int, d, int, e, int, f, int, g, int, h);
+NDX_HOOK_DEF(int, one_arg, int, a);
+NDX_HOOK_DEF(int, two_args, int, a, int, b);
+NDX_HOOK_DEF(int, four_args, int, a, int, b, int, c, int, d);
+NDX_HOOK_DEF(int, eight_args, int, a, int, b, int, c, int, d, int, e, int, f, int, g, int, h);
 
 static void test_arg_counts(void) {
 	assert(one_arg_adapter.arg_size == sizeof(struct one_arg_args));

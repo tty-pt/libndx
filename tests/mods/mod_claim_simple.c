@@ -4,7 +4,7 @@
  */
 #include <ttypt/ndx-mod.h>
 
-NDX_DEF(int, get_counter, int, dummy);
+NDX_LISTENER(int, get_counter, int, dummy);
 
 /* Request a 2-bit slice of the parent region */
 MODULE_API uint8_t ndx_claim = 2;

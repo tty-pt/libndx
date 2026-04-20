@@ -2,13 +2,13 @@
 
 static int counter = 100;
 
-NDX_DEF(int, get_counter, int, dummy)
+NDX_LISTENER(int, get_counter, int, dummy)
 {
 	(void)dummy;
 	return counter;
 }
 
-NDX_DEF(int, increment_counter, int, amount)
+NDX_LISTENER(int, increment_counter, int, amount)
 {
 	counter += amount;
 	return 0;

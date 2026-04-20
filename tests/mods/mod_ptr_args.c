@@ -1,5 +1,5 @@
 /*
- * mod_ptr_args — pointer-arg/ret hook implementations using NDX_DEF.
+ * mod_ptr_args — pointer-arg/ret hook implementations using NDX_LISTENER.
  * Also tests nested ndx_call: ptr_resolve(key) internally calls ptr_lookup(key).
  * This mirrors the site/mods/auth pattern where get_request_user ->
  * call_get_session_user from within a module body.
@@ -20,19 +20,19 @@ static const char *lookup_table(const char *token) {
 	return NULL;
 }
 
-NDX_DEF(const char *, ptr_lookup, const char *, token)
+NDX_LISTENER(const char *, ptr_lookup, const char *, token)
 {
 	if (!token || !*token) return NULL;
 	return lookup_table(token);
 }
 
-NDX_DEF(int, ptr_len, const char *, s)
+NDX_LISTENER(int, ptr_len, const char *, s)
 {
 	if (!s) return -1;
 	return (int)strlen(s);
 }
 
-NDX_DEF(int, ptr_copy, char *, dst, const char *, src, size_t, n)
+NDX_LISTENER(int, ptr_copy, char *, dst, const char *, src, size_t, n)
 {
 	if (!dst || !src) return -1;
 	size_t i = 0;
@@ -44,7 +44,7 @@ NDX_DEF(int, ptr_copy, char *, dst, const char *, src, size_t, n)
 /* Nested-dispatch hook: copies key into a local buffer, then calls
  * ptr_lookup via call_ptr_lookup (which re-enters ndx_call).
  * Mirrors get_request_user -> call_get_session_user pattern. */
-NDX_DEF(const char *, ptr_resolve, int, which)
+NDX_LISTENER(const char *, ptr_resolve, int, which)
 {
 	const char *key;
 	switch (which) {
@@ -53,7 +53,7 @@ NDX_DEF(const char *, ptr_resolve, int, which)
 		case 3: key = "tok-carol"; break;
 		default: return NULL;
 	}
-	return call_ptr_lookup(key);
+	return ptr_lookup(key);
 }
 
 MODULE_API void ndx_install(void) {}
