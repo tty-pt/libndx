@@ -159,6 +159,10 @@ ${TEST_DIR}/test_ptr_args${EXE}: ${TEST_DIR} ${TEST_DIR}/test_ptr_args.c lib/lib
 	${cc} -o $@ ${TEST_DIR}/test_ptr_args.c ${CFLAGS} ${TEST_CFLAGS} \
 		${LDFLAGS} -lndx ${LDLIBS-libndx} ${TEST_LDFLAGS}
 
+${TEST_DIR}/bench_dispatch${EXE}: ${TEST_DIR} ${TEST_DIR}/bench_dispatch.c lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/bench_dispatch.c ${CFLAGS} ${TEST_CFLAGS} -O2 \
+		${LDFLAGS} -lndx ${LDLIBS-libndx} ${TEST_LDFLAGS}
+
 ${TEST_DIR}/test_region_state${EXE}: ${TEST_DIR} ${TEST_DIR}/test_region_state.c lib/libndx.${SO}
 	${cc} -o $@ ${TEST_DIR}/test_region_state.c ${CFLAGS} ${TEST_CFLAGS} \
 		${LDFLAGS} -lndx ${LDLIBS-libndx} ${TEST_LDFLAGS}
@@ -291,3 +295,6 @@ test: test-build
 	@echo "Running test_ptr_args..."
 	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_ptr_args
 	@echo "All tests passed!"
+
+bench: test-build ${TEST_DIR}/bench_dispatch${EXE}
+	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/bench_dispatch
