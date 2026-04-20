@@ -1280,6 +1280,47 @@ typedef struct {
 _Static_assert(sizeof(ndx_dispatch_ctx_t) <= 72,
                "ndx_dispatch_ctx_t grew — review hot-path cache footprint");
 
+/*
+ * fn_cache_resolve — lazy per-module, per-hook dlsym cache.
+ *
+ * DISPATCH-SAFETY INVARIANT: this helper is called from inside the DFS
+ * dispatch loops of both the fast path (ndx_call) and the slow path
+ * (dispatch_next). It MUST NOT read ndx_last_adapter.* — that TLS slot is
+ * overwritten whenever a module body nested-calls another hook via
+ * ndx_call, and we are mid-iteration of the *outer* call.
+ *
+ * Caller must supply hook_id and name from a stable source: the caller's
+ * stack (reg->hook_id / reg->name in the fast path) or a ctx-local adapter
+ * copy (ctx->adapter->hook_id / ctx->adapter->name in the slow path).
+ *
+ * Returns resolved callback, or NULL if the module does not export this
+ * hook. Returns (void *)-1 (cast via NDX_FN_RESOLVE_OOM) if cache growth
+ * fails; caller treats this as abort (fast path returns NDX_ERR_INVALID,
+ * slow path sets ctx->abort_err).
+ */
+#define NDX_FN_RESOLVE_OOM ((void *)(uintptr_t)-1)
+
+static void * __attribute__((hot))
+fn_cache_resolve(ndx_mod_entry_t *me, int hook_id, const char *name)
+{
+	if (likely(hook_id >= 0 && hook_id < me->fn_cache_cap)) {
+		void *cb = me->fn_cache[hook_id];
+		if (likely(cb)) return cb == NDX_FN_NOT_FOUND ? NULL : cb;
+	} else if (hook_id >= 0) {
+		int new_cap = hook_id + 16;
+		void **tmp = realloc(me->fn_cache, new_cap * sizeof(void *));
+		if (unlikely(!tmp)) return NDX_FN_RESOLVE_OOM;
+		for (int i = me->fn_cache_cap; i < new_cap; i++) tmp[i] = NULL;
+		me->fn_cache = tmp;
+		me->fn_cache_cap = new_cap;
+	}
+
+	void *cb = dlsym(me->handle, name);
+	if (hook_id >= 0)
+		me->fn_cache[hook_id] = cb ? cb : NDX_FN_NOT_FOUND;
+	return cb;
+}
+
 static void dispatch_next(void *args, void *ret, void *ud);
 
 static void
@@ -1299,7 +1340,14 @@ dispatch_next(void *args, void *ret, void *ud)
 		ndx_t *indx = me->indx;
 		if (!indx) continue;
 
-		void *cb = dlsym(me->handle, ctx->adapter->name);
+		/* fn_cache lookup — uses ctx->adapter (stack-local copy owned by
+		 * ndx_call's slow path frame). MUST NOT read ndx_last_adapter. */
+		void *cb = fn_cache_resolve(me, ctx->adapter->hook_id,
+		                            ctx->adapter->name);
+		if (unlikely(cb == NDX_FN_RESOLVE_OOM)) {
+			ctx->abort_err = NDX_ERR_INVALID;
+			return;
+		}
 		if (!cb) continue;
 
 		indx->adapter = ctx->adapter;
@@ -1527,7 +1575,14 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 					}
 
 					ndx_t *indx = me->indx;
-					void *cb = dlsym(me->handle, reg->name);
+					/* fn_cache lookup — uses reg->hook_id/reg->name (stack-
+					 * local). MUST NOT read ndx_last_adapter: nested ndx_call
+					 * clobbers TLS mid-iteration. See fn_cache_resolve. */
+					void *cb = fn_cache_resolve(me, reg->hook_id, reg->name);
+					if (unlikely(cb == NDX_FN_RESOLVE_OOM)) {
+						NDX_SET_ERR(NDX_ERR_INVALID);
+						return NDX_ERR_INVALID;
+					}
 					if (!cb) continue;
 
 					indx->adapter = &ndx_last_adapter;
