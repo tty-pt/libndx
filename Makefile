@@ -268,43 +268,22 @@ TEST_BINS := ${TEST_DIR}/test_core${EXE} \
 	${TEST_DIR}/test_region_state${EXE} \
 	${TEST_DIR}/test_ptr_args${EXE}
 
-test-build: lib/libndx.${SO} ${TEST_MODS} ${TEST_BINS}
+BENCH_BIN := ${TEST_DIR}/bench_dispatch${EXE}
+VALIDATION_BINS := ${TEST_BINS} ${BENCH_BIN}
 
-bench: test-build ${TEST_DIR}/bench_dispatch${EXE}
-	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/bench_dispatch
+test-build: lib/libndx.${SO} ${TEST_MODS} ${VALIDATION_BINS}
 
-test: bench test-build
-	@echo "Running test_core..."
-	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_core
-	@echo "Running test_errors..."
-	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_errors
-	@echo "Running test_macros..."
-	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_macros
-	@echo "Running test_main..."
-	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_main
-	@echo "Running test_deps..."
-	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_deps
-	@echo "Running test_auto_init..."
-	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_auto_init
-	@echo "Running test_multi_call..."
-	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_multi_call
-	@echo "Running test_get..."
-	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_get
-	@echo "Running test_pledge..."
-	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_pledge
-	@echo "Running test_region..."
-	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_region
-	@echo "Running test_fn_hook..."
-	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_fn_hook
-	@echo "Running test_game..."
-	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_game
-	@echo "Running test_unload..."
-	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_unload
-	@echo "Running test_region_state..."
-	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_region_state
-	@echo "Running test_ptr_args..."
-	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_ptr_args
-	@echo "All tests passed!"
+bench: test-build
+	@LD_LIBRARY_PATH=./lib ./${BENCH_BIN}
+
+test: test-build
+	@set -e; \
+	for bin in ${VALIDATION_BINS}; do \
+		name=$$(basename $$bin); \
+		echo "Running $${name%${EXE}}..."; \
+		LD_LIBRARY_PATH=./lib ./$$bin; \
+	done; \
+	echo "All validation targets passed!"
 
 clean: test-clean
 
