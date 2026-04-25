@@ -13,7 +13,7 @@ typedef struct ndx_t_s ndx_t;
 
 /* A singly-linked list node for denied hook names or module paths */
 typedef struct ndx_deny_entry {
-	char *value;                  /* hook name or module path (owned) */
+	char *value;                  /* hook name (owned) or interned module path */
 	struct ndx_deny_entry *next;
 } ndx_deny_entry_t;
 
@@ -23,6 +23,7 @@ typedef struct ndx_deny_entry {
  */
 typedef struct ndx_interceptor_entry {
 	char                    *hook_name; /* owned */
+	int                      hook_id;    /* cached hook ID, -1 if unresolved */
 	ndx_interceptor_fn_t    *fn;
 	void                    *ud;
 	struct ndx_interceptor_entry *next;
@@ -57,12 +58,13 @@ typedef struct ndx_region_entry {
 	const char               *owner_path;  /* module that owns this region */
 
 	ndx_deny_entry_t         *denied_hooks;   /* hook names blocked here */
-	ndx_deny_entry_t         *denied_modules; /* module paths blocked here */
+	ndx_deny_entry_t         *denied_modules; /* interned module paths blocked here */
 	unsigned                  denied_hooks_set;   /* qmap hash set: hook name -> sentinel */
-	unsigned                  denied_modules_set; /* qmap hash set: module path -> sentinel */
+	unsigned                  denied_modules_set; /* qmap hash set: interned path ptr -> sentinel */
 	ndx_interceptor_entry_t  *interceptors;   /* middleware chain (head) */
 
-	unsigned                  pledge_hd;      /* per-region qmap: hook->owner */
+	unsigned                  pledge_hd;      /* per-region qmap: hook name -> owner */
+	unsigned                  pledge_ids_hd;  /* per-region qmap: hook id -> owner */
 
 	/* Cached flags — set whenever the corresponding field becomes non-NULL/non-zero.
 	 * Propagated upward through the ancestor chain so ndx_call can skip the
@@ -123,6 +125,7 @@ typedef struct ndx_mod_entry {
      * module exports ndx_region_state_size().  Freed (after optional
      * ndx_region_cleanup() call) on unload. */
     void *region_state;
+    const char *load_path;
     void    *handle;
     /* Direct pointer to the owning region entry — avoids hash lookup in dispatch. */
     struct ndx_region_entry *region_entry;

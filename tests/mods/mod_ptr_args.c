@@ -14,9 +14,18 @@ ndx_t ndx;
 
 static const char *lookup_table(const char *token) {
 	if (!token) return NULL;
-	if (strcmp(token, "tok-alice") == 0) return "alice";
-	if (strcmp(token, "tok-bob")   == 0) return "bob";
-	if (strcmp(token, "tok-carol") == 0) return "carol";
+	if (token[0] != 't' || token[1] != 'o' || token[2] != 'k' || token[3] != '-')
+		return NULL;
+	if (token[4] == 'a' &&
+	    token[5] == 'l' && token[6] == 'i' && token[7] == 'c' &&
+	    token[8] == 'e' && token[9] == '\0')
+		return "alice";
+	if (token[4] == 'b' && token[5] == 'o' && token[6] == 'b' && token[7] == '\0')
+		return "bob";
+	if (token[4] == 'c' &&
+	    token[5] == 'a' && token[6] == 'r' && token[7] == 'o' &&
+	    token[8] == 'l' && token[9] == '\0')
+		return "carol";
 	return NULL;
 }
 
@@ -29,7 +38,10 @@ NDX_LISTENER(const char *, ptr_lookup, const char *, token)
 NDX_LISTENER(int, ptr_len, const char *, s)
 {
 	if (!s) return -1;
-	return (int)strlen(s);
+	const char *p = s;
+	while (*p)
+		p++;
+	return (int)(p - s);
 }
 
 NDX_LISTENER(int, ptr_copy, char *, dst, const char *, src, size_t, n)

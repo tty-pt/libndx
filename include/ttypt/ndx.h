@@ -223,7 +223,6 @@ typedef void (*mod_cb_t)(void);
 	static inline UNUSED \
 	ftype fname(NDX_FA(__VA_ARGS__)) { \
 		ftype ret; \
-		memset(&ret, 0, sizeof(ret)); \
 		struct fname##_args args = { NDX_DA(__VA_ARGS__) }; \
 		__NDX_HOOK_DISPATCH(&ret, &__ndx_decl_##fname##_adapter, &args); \
 		return ret; \
@@ -233,6 +232,7 @@ typedef void (*mod_cb_t)(void);
 	void fname##_adapter_call(void *res, void *fn, void *arg) { \
 		fname##_t *cast_fn; \
 		if (!fn) { \
+			if (res) memset(res, 0, sizeof(ftype)); \
 			WARN("%s_adapter_call: '%s' wasn't defined\n", \
 				XSTR(fname), XSTR(fname)); \
 			return; \
@@ -291,6 +291,7 @@ typedef void (*mod_cb_t)(void);
 	void fname##_adapter_call(void *res, void *fn, void *arg) { \
 	fname##_t *cast_fn; \
 	if (!fn) { \
+		if (res) memset(res, 0, sizeof(ftype)); \
 		WARN("%s_adapter_call: '%s' wasn't defined\n", \
 				XSTR(fname), XSTR(fname)); \
 		return; \
