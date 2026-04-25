@@ -194,7 +194,6 @@ typedef void (*mod_cb_t)(void);
 	static inline UNUSED \
 	ftype fname(NDX_FA(__VA_ARGS__)) { \
 		ftype ret; \
-		memset(&ret, 0, sizeof(ret)); \
 		struct fname##_args args = { NDX_DA(__VA_ARGS__) }; \
 		__NDX_HOOK_DISPATCH(&ret, &__ndx_decl_##fname##_adapter, &args); \
 		return ret; \

@@ -167,6 +167,13 @@ qmap_ptr(const void *value)
 	return value ? *(void * const *) value : NULL;
 }
 
+static inline void
+ndx_zero_ret(void *retp, const ndx_adapter_t *reg)
+{
+	if (retp && reg)
+		memset(retp, 0, reg->ret_size);
+}
+
 /* Look up an ndx_region_entry_t by id.  Returns NULL if not found. */
 static ndx_region_entry_t *
 region_lookup(uint64_t id)
@@ -610,20 +617,34 @@ module_rekey_loaded_entry(ndx_mod_entry_t *me, const char *old_key,
 }
 
 static void *
+module_base_from_symbol(void *sym)
+{
+#ifdef _WIN32
+	HMODULE mod = NULL;
+	if (!sym)
+		return NULL;
+	if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+	                        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+	                        (LPCSTR) sym, &mod))
+		return NULL;
+	return (void *) mod;
+#else
+	Dl_info di;
+	if (!sym || !dladdr(sym, &di))
+		return NULL;
+	return di.dli_fbase;
+#endif
+}
+
+static void *
 module_handle_base(void *handle)
 {
 #ifdef _WIN32
-	(void)handle;
-	return NULL;
+	return handle;
 #else
 	void *any_sym = dlsym(handle, "ndx_install");
 	if (!any_sym) any_sym = dlsym(handle, "get_ndx_ptr");
-	if (!any_sym)
-		return NULL;
-	Dl_info di;
-	if (!dladdr(any_sym, &di))
-		return NULL;
-	return di.dli_fbase;
+	return module_base_from_symbol(any_sym);
 #endif
 }
 
@@ -693,10 +714,9 @@ module_remove_interceptors(ndx_region_entry_t *re, void *base)
 
 	ndx_interceptor_entry_t **ip = &re->interceptors;
 	while (*ip) {
-		Dl_info fi2;
 		void *fn_ptr;
 		memcpy(&fn_ptr, &(*ip)->fn, sizeof(fn_ptr));
-		if (dladdr(fn_ptr, &fi2) && fi2.dli_fbase == base) {
+		if (module_base_from_symbol(fn_ptr) == base) {
 			ndx_interceptor_entry_t *dead = *ip;
 			*ip = dead->next;
 			free(dead->hook_name);
@@ -766,7 +786,6 @@ module_region_append(ndx_region_entry_t *re, ndx_mod_entry_t *entry)
 static void
 module_clear_fn_cache_for_handle(ndx_mod_entry_t *entry)
 {
-#ifndef _WIN32
 	if (!entry || !entry->handle)
 		return;
 	void *base = module_handle_base(entry->handle);
@@ -781,14 +800,10 @@ module_clear_fn_cache_for_handle(ndx_mod_entry_t *entry)
 		for (int i = 0; i < m->fn_cache_cap; i++) {
 			void *fp = m->fn_cache[i];
 			if (!fp || fp == NDX_FN_NOT_FOUND) continue;
-			Dl_info fi;
-			if (dladdr(fp, &fi) && fi.dli_fbase == base)
+			if (module_base_from_symbol(fp) == base)
 				m->fn_cache[i] = NULL; /* force re-resolve */
 		}
 	}
-#else
-	(void)entry;
-#endif
 }
 
 static int
@@ -1873,6 +1888,8 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 		return NDX_ERR_NOTFOUND;
 	}
 
+	int pre_err = NDX_GET_ERR();
+	int ret = NDX_OK;
 	int pledge_hook_id = reg->hook_id;
 	if (unlikely(ndx_pledge_count > 0 && pledge_hook_id < 0)) {
 		const void *hid_v = qmap_get(hook_id_hd, reg->name);
@@ -1895,8 +1912,8 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 			const char *caller = ndx_current_caller;
 			if (!caller || strcmp(caller, global_pledge_owner) != 0) {
 				ndx_warn_pledge_root(caller, reg->name, global_pledge_owner);
-				NDX_SET_ERR(NDX_ERR_EPERM);
-				return NDX_ERR_EPERM;
+				ret = NDX_ERR_EPERM;
+				goto fail;
 			}
 		}
 	}
@@ -1937,8 +1954,8 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 			/* Denied hook? Fires for any call into the denying region or its descendants. */
 			if (anc_chain[i]->denied_hooks_set &&
 			    qmap_get(anc_chain[i]->denied_hooks_set, reg->name)) {
-				NDX_SET_ERR(NDX_ERR_EPERM);
-				return NDX_ERR_EPERM;
+				ret = NDX_ERR_EPERM;
+				goto fail;
 			}
 			/* Region-scoped pledge check */
 			if (anc_chain[i]->pledge_ids_hd || anc_chain[i]->pledge_hd) {
@@ -1952,8 +1969,8 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 					if (!caller || strcmp(caller, rp_owner) != 0) {
 						ndx_warn_pledge_region(caller, reg->name,
 						     (unsigned long long)anc_chain[i]->id, rp_owner);
-						NDX_SET_ERR(NDX_ERR_EPERM);
-						return NDX_ERR_EPERM;
+						ret = NDX_ERR_EPERM;
+						goto fail;
 					}
 				}
 			}
@@ -1971,8 +1988,8 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 	if (unlikely(hook_id < 0)) {
 		const void *hid_v = qmap_get(hook_id_hd, reg->name);
 		if (!hid_v) {
-			NDX_SET_ERR(NDX_ERR_NOTFOUND);
-			return NDX_ERR_NOTFOUND;
+			ret = NDX_ERR_NOTFOUND;
+			goto fail;
 		}
 		hook_id = *(const int *)hid_v;
 		reg->hook_id = hook_id; /* write back — next call is O(1) */
@@ -1988,8 +2005,8 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 		/* Bounds-check on first resolve only — ret_size doesn't change
 		 * after registration, so subsequent hot-path calls skip this. */
 		if (unlikely(reg->ret_size > NDX_MAX_RET_SIZE)) {
-			NDX_SET_ERR(NDX_ERR_TOOBIG);
-			return NDX_ERR_TOOBIG;
+			ret = NDX_ERR_TOOBIG;
+			goto fail;
 		}
 	}
 
@@ -2005,8 +2022,6 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 	 *   Collect entries[] first, then run through the middleware chain.
 	 *   Uses a local adapter copy so middleware can read/write adapter.ret.
 	 * ------------------------------------------------------------------ */
-	int pre_err = NDX_GET_ERR();
-
 /* Resolve dispatch call pointer into a stack local so nested ndx_call
 		 * invocations (from module bodies) cannot clobber what we dispatch.
 		 * ndx_last_* TLS is shared across nested calls; dispatch_call is stack-local. */
@@ -2016,8 +2031,8 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 		if (canonical) dispatch_call = canonical->call;
 	}
 	if (unlikely(!dispatch_call)) {
-		NDX_SET_ERR(NDX_ERR_NOTFOUND);
-		return NDX_ERR_NOTFOUND;
+		ret = NDX_ERR_NOTFOUND;
+		goto fail;
 	}
 
 	if (likely(!has_interceptors)) {
@@ -2035,8 +2050,8 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 		if (caller_region_entry) {
 			if (unlikely(caller_region_entry->subtree_mods_dirty)) {
 				if (region_rebuild_subtree_mods(caller_region_entry) < 0) {
-					NDX_SET_ERR(NDX_ERR_INVALID);
-					return NDX_ERR_INVALID;
+					ret = NDX_ERR_INVALID;
+					goto fail;
 				}
 			}
 			ndx_mod_entry_t **mods = caller_region_entry->subtree_mods;
@@ -2061,8 +2076,8 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 							                             /*commit_ret=*/0,
 							                             region_id);
 							if (unlikely(rc == NDX_ERR_INVALID)) {
-								NDX_SET_ERR(NDX_ERR_INVALID);
-								return NDX_ERR_INVALID;
+								ret = NDX_ERR_INVALID;
+								goto fail;
 							}
 							if (rc == 0) ran++;
 						}
@@ -2076,8 +2091,8 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 						                             /*commit_ret=*/0,
 						                             region_id);
 						if (unlikely(rc == NDX_ERR_INVALID)) {
-							NDX_SET_ERR(NDX_ERR_INVALID);
-							return NDX_ERR_INVALID;
+							ret = NDX_ERR_INVALID;
+							goto fail;
 						}
 						if (rc == 0) ran++;
 					}
@@ -2104,8 +2119,8 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 					                             /*commit_ret=*/0,
 					                             region_id);
 					if (unlikely(rc == NDX_ERR_INVALID)) {
-						NDX_SET_ERR(NDX_ERR_INVALID);
-						return NDX_ERR_INVALID;
+						ret = NDX_ERR_INVALID;
+						goto fail;
 					}
 					if (rc == 0) ran++;
 				}
@@ -2137,8 +2152,8 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 					                             /*commit_ret=*/0,
 					                             region_id);
 					if (unlikely(rc == NDX_ERR_INVALID)) {
-						NDX_SET_ERR(NDX_ERR_INVALID);
-						return NDX_ERR_INVALID;
+						ret = NDX_ERR_INVALID;
+						goto fail;
 					}
 					if (rc == 0) ran++;
 				}
@@ -2159,8 +2174,8 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 		if (caller_region_entry) {
 			if (unlikely(caller_region_entry->subtree_mods_dirty)) {
 				if (region_rebuild_subtree_mods(caller_region_entry) < 0) {
-					NDX_SET_ERR(NDX_ERR_INVALID);
-					return NDX_ERR_INVALID;
+					ret = NDX_ERR_INVALID;
+					goto fail;
 				}
 			}
 			ndx_mod_entry_t **mods = caller_region_entry->subtree_mods;
@@ -2227,8 +2242,8 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 		dispatch_next(arg, retp, &ctx);
 
 		if (unlikely(ctx.abort_err)) {
-			NDX_SET_ERR(ctx.abort_err);
-			return ctx.abort_err;
+			ret = ctx.abort_err;
+			goto fail;
 		}
 
 		/* Commit to TLS for ndx.last() */
@@ -2243,6 +2258,11 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 	if (pre_err != NDX_OK && NDX_GET_ERR() == pre_err)
 		NDX_SET_ERR(NDX_OK);
 	return NDX_OK;
+
+fail:
+	ndx_zero_ret(retp, reg);
+	NDX_SET_ERR(ret);
+	return ret;
 }
 
 /* -------------------------------------------------------------------------
