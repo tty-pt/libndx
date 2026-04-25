@@ -91,6 +91,16 @@ static volatile int ndx_inited;
 static void __attribute__((cold)) ndx_init_once(void);
 static int _mod_unload(char *fname, uint64_t region_id);
 static int fn_cache_prewarm(ndx_mod_entry_t *me);
+static int module_is_denied(ndx_region_entry_t *re, const char *path);
+static inline int ndx_dispatch_module(ndx_mod_entry_t *me,
+                                      int hook_id,
+                                      const char *name,
+                                      ndx_adapter_t *adapter,
+                                      void (*call_fn)(void *, void *, void *),
+                                      void *retp,
+                                      void *arg,
+                                      int commit_ret,
+                                      uint64_t current_region_id);
 static void module_rekey_region_index(ndx_mod_entry_t *me, uint64_t parent_id,
                                       uint64_t child_id);
 static void module_rekey_loaded_entry(ndx_mod_entry_t *me, const char *old_key,
@@ -167,11 +177,88 @@ qmap_ptr(const void *value)
 	return value ? *(void * const *) value : NULL;
 }
 
+static inline void *
+module_lookup_symbol_raw(void *handle, const char *symbol)
+{
+#ifdef _WIN32
+	void *sym = NULL;
+	FARPROC fp = GetProcAddress((HMODULE) handle, symbol);
+	memcpy(&sym, &fp, sizeof(sym));
+	return sym;
+#else
+	return dlsym(handle, symbol);
+#endif
+}
+
+static inline int
+module_lookup_symbol_fn(void *handle, const char *symbol, void *fn_out, size_t fn_size)
+{
+	void *sym = module_lookup_symbol_raw(handle, symbol);
+	if (!sym)
+		return 0;
+	memcpy(fn_out, &sym, fn_size);
+	return 1;
+}
+
 static inline void
 ndx_zero_ret(void *retp, const ndx_adapter_t *reg)
 {
 	if (retp && reg)
 		memset(retp, 0, reg->ret_size);
+}
+
+static inline int
+module_denied_by_ancestors(ndx_mod_entry_t *me,
+                           ndx_region_entry_t **anc_chain, int anc_n)
+{
+	if (!me || !me->load_path)
+		return 0;
+	for (int i = 0; i < anc_n; i++) {
+		if (module_is_denied(anc_chain[i], me->load_path))
+			return 1;
+	}
+	return 0;
+}
+
+static inline int __attribute__((always_inline, hot))
+dispatch_fast_module(ndx_mod_entry_t *me,
+                     ndx_adapter_t *reg,
+                     void (*dispatch_call)(void *, void *, void *),
+                     void *retp, void *arg, uint64_t region_id,
+                     ndx_region_entry_t **anc_chain, int anc_n,
+                     int check_denies)
+{
+	if (!me || !me->indx)
+		return 0;
+	if (unlikely(check_denies) && module_denied_by_ancestors(me, anc_chain, anc_n))
+		return 0;
+
+	int rc = ndx_dispatch_module(me,
+	                             reg->hook_id,
+	                             reg->name,
+	                             reg,
+	                             dispatch_call,
+	                             retp, arg,
+	                             /*commit_ret=*/0,
+	                             region_id);
+	if (unlikely(rc == NDX_ERR_INVALID))
+		return NDX_ERR_INVALID;
+	return rc == 0;
+}
+
+static int
+module_ensure_fn_cache_cap(ndx_mod_entry_t *me, int needed)
+{
+	if (!me || needed <= me->fn_cache_cap)
+		return 0;
+	void **tmp = realloc(me->fn_cache, needed * sizeof(void *));
+	if (unlikely(!tmp))
+		return -1;
+	for (int i = me->fn_cache_cap; i < needed; i++)
+		tmp[i] = NULL;
+	me->fn_cache = tmp;
+	me->fn_cache_cap = needed;
+	return 0;
 }
 
 /* Look up an ndx_region_entry_t by id.  Returns NULL if not found. */
@@ -642,8 +729,8 @@ module_handle_base(void *handle)
 #ifdef _WIN32
 	return handle;
 #else
-	void *any_sym = dlsym(handle, "ndx_install");
-	if (!any_sym) any_sym = dlsym(handle, "get_ndx_ptr");
+	void *any_sym = module_lookup_symbol_raw(handle, "ndx_install");
+	if (!any_sym) any_sym = module_lookup_symbol_raw(handle, "get_ndx_ptr");
 	return module_base_from_symbol(any_sym);
 #endif
 }
@@ -1245,31 +1332,13 @@ ndx_with_region(uint64_t region_id, ndx_scope_fn_t *fn, void *ud)
 }
 
 /* -------------------------------------------------------------------------
- * Module shutdown helpers
- * ------------------------------------------------------------------------- */
-
-static void ndx_exist(void) {
-	ndx_init_once();
-	unsigned c = qmap_iter(mod_hd, NULL, 0);
-	const void *key, *value;
-
-	while (qmap_next(&key, &value, c)) {
-		ndx_mod_entry_t *entry = qmap_ptr(value);
-		if (entry) {
-			free(entry->fn_cache);
-			dlclose(entry->handle);
-		}
-	}
-}
-
-/* -------------------------------------------------------------------------
  * Module loading
  * ------------------------------------------------------------------------- */
 
 int _mod_run(void *sl, char *symbol) {
 	void (*cb)(void) = NULL;
 
-	* (void **) &cb = dlsym(sl, symbol);
+	module_lookup_symbol_fn(sl, symbol, &cb, sizeof(cb));
 
 	if (!cb) {
 		WARN("couldn't find %s\n", symbol);
@@ -1343,7 +1412,7 @@ int _mod_load(char *fname) {
 	}
 
 	symbol = "ndx_install";
-	WARN("%s: '%s'\n", symbol, fname);
+	// WARN("%s: '%s'\n", symbol, fname);
 
 	/* Duplicate fname so module_path remains valid after the caller's buffer
 	 * is freed (e.g. alloca'd in a parent frame). */
@@ -1373,7 +1442,7 @@ int _mod_load(char *fname) {
 	qmap_put(mod_hd, stable_key, &mod_entry);
 
 	get_ndx_func_t get_ndx = NULL;
-	* (void **) &get_ndx = dlsym(sl, "get_ndx_ptr");
+	module_lookup_symbol_fn(sl, "get_ndx_ptr", &get_ndx, sizeof(get_ndx));
 	if (get_ndx) {
 		ndx_t *indx = get_ndx();
 		_ndx_init(indx, stable_fname, inherited_region_id);
@@ -1394,7 +1463,7 @@ int _mod_load(char *fname) {
 	 *    no require_claim → ignore the symbol and load normally.
 	 * ------------------------------------------------------------------ */
 	ndx_region_entry_t *inherited_reg = region_lookup(inherited_region_id);
-	uint8_t *claim_sym = (uint8_t *)dlsym(sl, "ndx_claim");
+	uint8_t *claim_sym = module_lookup_symbol_raw(sl, "ndx_claim");
 
 	if (inherited_reg && inherited_reg->require_claim && !claim_sym) {
 		/* No ndx_claim symbol — reject */
@@ -1448,7 +1517,7 @@ int _mod_load(char *fname) {
 	{
 		typedef size_t ndx_region_state_size_t(void);
 		ndx_region_state_size_t *sz_fn = NULL;
-		*(void **)&sz_fn = dlsym(sl, "ndx_region_state_size");
+		module_lookup_symbol_fn(sl, "ndx_region_state_size", &sz_fn, sizeof(sz_fn));
 		if (sz_fn) {
 			size_t sz = sz_fn();
 			if (sz > 0)
@@ -1567,7 +1636,8 @@ _mod_unload(char *fname, uint64_t region_id)
 	if (entry->region_state) {
 		typedef void ndx_region_cleanup_t(void *state);
 		ndx_region_cleanup_t *cleanup_fn = NULL;
-		*(void **)&cleanup_fn = dlsym(entry->handle, "ndx_region_cleanup");
+		module_lookup_symbol_fn(entry->handle, "ndx_region_cleanup",
+		                        &cleanup_fn, sizeof(cleanup_fn));
 		if (cleanup_fn)
 			cleanup_fn(entry->region_state);
 		free(entry->region_state);
@@ -1720,15 +1790,11 @@ fn_cache_resolve(ndx_mod_entry_t *me, int hook_id, const char *name)
 		void *cb = me->fn_cache[hook_id];
 		if (likely(cb)) return cb == NDX_FN_NOT_FOUND ? NULL : cb;
 	} else if (hook_id >= 0) {
-		int new_cap = hook_id + 16;
-		void **tmp = realloc(me->fn_cache, new_cap * sizeof(void *));
-		if (unlikely(!tmp)) return NDX_FN_RESOLVE_OOM;
-		for (int i = me->fn_cache_cap; i < new_cap; i++) tmp[i] = NULL;
-		me->fn_cache = tmp;
-		me->fn_cache_cap = new_cap;
+		if (module_ensure_fn_cache_cap(me, hook_id + 16) < 0)
+			return NDX_FN_RESOLVE_OOM;
 	}
 
-	void *cb = dlsym(me->handle, name);
+	void *cb = module_lookup_symbol_raw(me->handle, name);
 	if (hook_id >= 0)
 		me->fn_cache[hook_id] = cb ? cb : NDX_FN_NOT_FOUND;
 	return cb;
@@ -1750,14 +1816,7 @@ fn_cache_prewarm(ndx_mod_entry_t *me)
 	if (!me || !me->handle) return 0;
 	int needed = ndx_hook_id_counter;
 	if (needed <= 0) return 0;
-	if (needed > me->fn_cache_cap) {
-		int new_cap = needed + 16;
-		void **tmp = realloc(me->fn_cache, new_cap * sizeof(void *));
-		if (unlikely(!tmp)) return -1;
-		for (int i = me->fn_cache_cap; i < new_cap; i++) tmp[i] = NULL;
-		me->fn_cache = tmp;
-		me->fn_cache_cap = new_cap;
-	}
+	if (module_ensure_fn_cache_cap(me, needed + 16) < 0) return -1;
 	/* Iterate hook_id_hd (name → hook_id) and dlsym each in this module */
 	unsigned c = qmap_iter(hook_id_hd, NULL, 0);
 	const void *key, *value;
@@ -1766,7 +1825,7 @@ fn_cache_prewarm(ndx_mod_entry_t *me)
 		int hook_id = *(const int *)value;
 		if (hook_id < 0 || hook_id >= me->fn_cache_cap) continue;
 		if (me->fn_cache[hook_id]) continue; /* already resolved */
-		void *cb = dlsym(me->handle, name);
+		void *cb = module_lookup_symbol_raw(me->handle, name);
 		me->fn_cache[hook_id] = cb ? cb : NDX_FN_NOT_FOUND;
 	}
 	return 0;
@@ -2057,72 +2116,26 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 			ndx_mod_entry_t **mods = caller_region_entry->subtree_mods;
 			int n = caller_region_entry->subtree_mods_count;
 			if (likely(n == 1)) {
-				ndx_mod_entry_t *me = mods[0];
-				if (me->indx) {
-					if (unlikely(has_deny_pledge)) {
-						const char *mpath = me->load_path;
-						int denied = 0;
-						for (int i = 0; i < anc_n && !denied; i++) {
-							if (module_is_denied(anc_chain[i], mpath))
-								denied = 1;
-						}
-						if (!denied) {
-							int rc = ndx_dispatch_module(me,
-							                             reg->hook_id,
-							                             reg->name,
-							                             (ndx_adapter_t *)reg,
-							                             dispatch_call,
-							                             retp, arg,
-							                             /*commit_ret=*/0,
-							                             region_id);
-							if (unlikely(rc == NDX_ERR_INVALID)) {
-								ret = NDX_ERR_INVALID;
-								goto fail;
-							}
-							if (rc == 0) ran++;
-						}
-					} else {
-						int rc = ndx_dispatch_module(me,
-						                             reg->hook_id,
-						                             reg->name,
-						                             (ndx_adapter_t *)reg,
-						                             dispatch_call,
-						                             retp, arg,
-						                             /*commit_ret=*/0,
-						                             region_id);
-						if (unlikely(rc == NDX_ERR_INVALID)) {
-							ret = NDX_ERR_INVALID;
-							goto fail;
-						}
-						if (rc == 0) ran++;
-					}
+				int did_run = dispatch_fast_module(mods[0], (ndx_adapter_t *)reg,
+				                                   dispatch_call, retp, arg,
+				                                   region_id, anc_chain, anc_n,
+				                                   has_deny_pledge);
+				if (unlikely(did_run == NDX_ERR_INVALID)) {
+					ret = NDX_ERR_INVALID;
+					goto fail;
 				}
+				ran += did_run;
 			} else if (likely(n == 2)) {
 				for (int mi = 0; mi < 2; mi++) {
-					ndx_mod_entry_t *me = mods[mi];
-					if (!me->indx) continue;
-					if (unlikely(has_deny_pledge)) {
-						const char *mpath = me->load_path;
-						int denied = 0;
-						for (int i = 0; i < anc_n && !denied; i++) {
-							if (module_is_denied(anc_chain[i], mpath))
-								denied = 1;
-						}
-						if (denied) continue;
-					}
-					int rc = ndx_dispatch_module(me,
-					                             reg->hook_id,
-					                             reg->name,
-					                             (ndx_adapter_t *)reg,
-					                             dispatch_call,
-					                             retp, arg,
-					                             /*commit_ret=*/0,
-					                             region_id);
-					if (unlikely(rc == NDX_ERR_INVALID)) {
+					int did_run = dispatch_fast_module(mods[mi], (ndx_adapter_t *)reg,
+					                                   dispatch_call, retp, arg,
+					                                   region_id, anc_chain, anc_n,
+					                                   has_deny_pledge);
+					if (unlikely(did_run == NDX_ERR_INVALID)) {
 						ret = NDX_ERR_INVALID;
 						goto fail;
 					}
-					if (rc == 0) ran++;
+					ran += did_run;
 				}
 			} else {
 				for (int mi = 0; mi < n; mi++) {
@@ -2130,32 +2143,15 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 					/* Prefetch next module's hot cache line */
 					if (mi + 1 < n)
 						__builtin_prefetch(mods[mi + 1], 0, 1);
-					if (!me->indx) continue;
-
-					/* Module-denied check (only when subtree has denies) */
-					if (unlikely(has_deny_pledge)) {
-						const char *mpath = me->load_path;
-						int denied = 0;
-						for (int i = 0; i < anc_n && !denied; i++) {
-							if (module_is_denied(anc_chain[i], mpath))
-								denied = 1;
-						}
-						if (denied) continue;
-					}
-
-					int rc = ndx_dispatch_module(me,
-					                             reg->hook_id,
-					                             reg->name,
-					                             (ndx_adapter_t *)reg,
-					                             dispatch_call,
-					                             retp, arg,
-					                             /*commit_ret=*/0,
-					                             region_id);
-					if (unlikely(rc == NDX_ERR_INVALID)) {
+					int did_run = dispatch_fast_module(me, (ndx_adapter_t *)reg,
+					                                   dispatch_call, retp, arg,
+					                                   region_id, anc_chain, anc_n,
+					                                   has_deny_pledge);
+					if (unlikely(did_run == NDX_ERR_INVALID)) {
 						ret = NDX_ERR_INVALID;
 						goto fail;
 					}
-					if (rc == 0) ran++;
+					ran += did_run;
 				}
 			}
 		}
@@ -2324,9 +2320,17 @@ ndx_areg(char *name, ndx_adapter_t *adapter)
 void
 ndx_shutdown(void)
 {
-#ifndef _WIN32
-	ndx_exist();
-#endif
+	{
+		unsigned c = qmap_iter(mod_hd, NULL, 0);
+		const void *key, *value;
+		while (qmap_next(&key, &value, c)) {
+			ndx_mod_entry_t *entry = qmap_ptr(value);
+			if (!entry)
+				continue;
+			free(entry->fn_cache);
+			dlclose(entry->handle);
+		}
+	}
 	path_intern_free_all();
 	/* Free region entries */
 	{

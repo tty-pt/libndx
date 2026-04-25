@@ -270,7 +270,10 @@ TEST_BINS := ${TEST_DIR}/test_core${EXE} \
 
 test-build: lib/libndx.${SO} ${TEST_MODS} ${TEST_BINS}
 
-test: test-build
+bench: test-build ${TEST_DIR}/bench_dispatch${EXE}
+	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/bench_dispatch
+
+test: bench test-build
 	@echo "Running test_core..."
 	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_core
 	@echo "Running test_errors..."
@@ -302,9 +305,6 @@ test: test-build
 	@echo "Running test_ptr_args..."
 	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/test_ptr_args
 	@echo "All tests passed!"
-
-bench: test-build ${TEST_DIR}/bench_dispatch${EXE}
-	@LD_LIBRARY_PATH=./lib ./${TEST_DIR}/bench_dispatch
 
 clean: test-clean
 
