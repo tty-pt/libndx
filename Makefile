@@ -83,14 +83,6 @@ ${TEST_DIR}/mods/mod_multiplier.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_multipli
 	${cc} -o $@ ${TEST_DIR}/mods/mod_multiplier.c ${CFLAGS} ${TEST_CFLAGS} \
 		-fPIC -shared ${LDFLAGS} -lndx ${LDLIBS-libndx}
 
-${TEST_DIR}/mods/mod_pledge_owner.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_pledge_owner.c lib/libndx.${SO}
-	${cc} -o $@ ${TEST_DIR}/mods/mod_pledge_owner.c ${CFLAGS} ${TEST_CFLAGS} \
-		-fPIC -shared ${LDFLAGS} -lndx ${LDLIBS-libndx}
-
-${TEST_DIR}/mods/mod_pledge_interloper.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_pledge_interloper.c lib/libndx.${SO}
-	${cc} -o $@ ${TEST_DIR}/mods/mod_pledge_interloper.c ${CFLAGS} ${TEST_CFLAGS} \
-		-fPIC -shared ${LDFLAGS} -lndx ${LDLIBS-libndx}
-
 ${TEST_DIR}/mods/mod_region_worker.${SO}: ${TEST_DIR} ${TEST_DIR}/mods/mod_region_worker.c lib/libndx.${SO}
 	${cc} -o $@ ${TEST_DIR}/mods/mod_region_worker.c ${CFLAGS} ${TEST_CFLAGS} \
 		-fPIC -shared ${LDFLAGS} -lndx ${LDLIBS-libndx}
@@ -171,10 +163,6 @@ ${TEST_DIR}/test_unload${EXE}: ${TEST_DIR} ${TEST_DIR}/test_unload.c lib/libndx.
 	${cc} -o $@ ${TEST_DIR}/test_unload.c ${CFLAGS} ${TEST_CFLAGS} \
 		${LDFLAGS} -lndx ${LDLIBS-libndx} ${TEST_LDFLAGS}
 
-${TEST_DIR}/test_pledge${EXE}: ${TEST_DIR} ${TEST_DIR}/test_pledge.c lib/libndx.${SO}
-	${cc} -o $@ ${TEST_DIR}/test_pledge.c ${CFLAGS} ${TEST_CFLAGS} \
-		${LDFLAGS} -lndx ${LDLIBS-libndx} ${TEST_LDFLAGS}
-
 ${TEST_DIR}/test_threads${EXE}: ${TEST_DIR} ${TEST_DIR}/test_threads.c lib/libndx.${SO}
 	${cc} -o $@ ${TEST_DIR}/test_threads.c ${CFLAGS} ${TEST_CFLAGS} \
 		${LDFLAGS} -lndx ${LDLIBS-libndx} ${TEST_LDFLAGS}
@@ -227,8 +215,6 @@ TEST_MODS := ${TEST_DIR}/test_mod.${SO} \
 	${TEST_DIR}/mods/mod_auto.${SO} \
 	${TEST_DIR}/mods/mod_adder.${SO} \
 	${TEST_DIR}/mods/mod_multiplier.${SO} \
-	${TEST_DIR}/mods/mod_pledge_owner.${SO} \
-	${TEST_DIR}/mods/mod_pledge_interloper.${SO} \
 	${TEST_DIR}/mods/mod_region_worker.${SO} \
 	${TEST_DIR}/mods/mod_region_moderator.${SO} \
 	${TEST_DIR}/mods/mod_claim_god.${SO} \
@@ -260,7 +246,6 @@ TEST_BINS := ${TEST_DIR}/test_core${EXE} \
 	${TEST_DIR}/test_auto_init${EXE} \
 	${TEST_DIR}/test_multi_call${EXE} \
 	${TEST_DIR}/test_get${EXE} \
-	${TEST_DIR}/test_pledge${EXE} \
 	${TEST_DIR}/test_region${EXE} \
 	${TEST_DIR}/test_fn_hook${EXE} \
 	${TEST_DIR}/test_game${EXE} \

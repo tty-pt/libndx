@@ -94,7 +94,7 @@
 #define NDX_ERR_INIT      -4
 
 /**
- * @brief Error: Operation not permitted (pledge or claim violation).
+ * @brief Error: Operation not permitted (deny, claim, unload veto, etc.).
  */
 #define NDX_ERR_EPERM     -5
 
@@ -161,20 +161,15 @@ typedef void (*mod_cb_t)(void);
   #define AUTO_INIT __attribute__((used)) __attribute__((section(".init_array")))
 #endif
 
-#ifdef __NDX_CALLER_PATH_DEFINED__
 #define __NDX_HOOK_DISPATCH(retp, adapterp, argp) \
-	ndx.call((retp), (adapterp), (argp), ndx.module_path)
-#else
-#define __NDX_HOOK_DISPATCH(retp, adapterp, argp) \
-	ndx_call((retp), (adapterp), (argp), __ndx_caller_path__)
-#endif
+	ndx_call((retp), (adapterp), (argp))
 
 /**
  * @brief Declare a hook that can be called like a normal function.
  *
  * This is the preferred declaration form for call sites that should read as
  * ordinary C. The generated inline function still routes through NDX_CALL, so
- * caller identity and the current execution region are preserved.
+ * the current execution region is preserved.
  *
  * Do not use this macro in the same translation unit that defines a listener
  * for the same hook name with NDX_LISTENER; the listener should keep using
@@ -334,31 +329,13 @@ typedef void (*mod_cb_t)(void);
 /* the caller uses this to call */
 #define NDX_CALL(retp, fname, ...) { \
 	struct fname##_args args = { __VA_ARGS__ }; \
-	ndx_call(retp, &fname##_adapter, &args, __ndx_caller_path__); \
+	ndx_call(retp, &fname##_adapter, &args); \
 }
 
 /* Internal types - used by ndx_t struct */
 typedef unsigned ndx_areg_t(char *name, ndx_adapter_t *adapter);
-typedef int ndx_call_t(void *retp, ndx_adapter_t *adapter, void *args, const char *caller);
+typedef int ndx_call_t(void *retp, ndx_adapter_t *adapter, void *args);
 typedef int ndx_last_t(void *ret);
-typedef void ndx_set_caller_t(const char *module_path);
-
-/**
- * @brief Pledge exclusive call rights to a hook, scoped to the caller's region.
- *
- * In module context the pledge is scoped to the module's assigned region.
- * In host context (caller == NULL / root) the pledge is root-scoped (global).
- *
- * The first caller wins; any subsequent ndx_pledge for the same hook in the
- * same region returns NDX_ERR_EPERM.  After a pledge is recorded, any other
- * caller invoking the pledged hook via ndx_call in that region will receive
- * NDX_ERR_EPERM.
- *
- * @param hook_name Name of the hook to restrict (e.g., "get_counter")
- * @return NDX_OK on success, NDX_ERR_EPERM if already pledged,
- *         NDX_ERR_INVALID if caller identity is unavailable
- */
-typedef int ndx_pledge_t(const char *hook_name);
 
 /* -------------------------------------------------------------------------
  * Region API types
@@ -390,33 +367,6 @@ typedef enum {
  * @return NDX_OK or a negative NDX_ERR_* code.
  */
 typedef int ndx_deny_t(const char *what, ndx_deny_type_t type);
-
-/**
- * @brief Interceptor function type (middleware pattern).
- *
- * @param hook    Name of the hook being dispatched
- * @param args    Packed argument struct (cast to the hook's args type)
- * @param ret     Return-value buffer (cast to the hook's return type)
- * @param next    Call this to continue the chain; skip it to block
- * @param next_ud Opaque pointer to pass verbatim to @p next (do not modify)
- * @param ud      User-supplied data from ndx_intercept()
- * @return NDX_OK, or a negative error code to signal failure upstream
- */
-typedef void (*ndx_call_fn_t)(void *args, void *ret, void *ud);
-typedef int ndx_interceptor_fn_t(
-	const char *hook, void *args, void *ret,
-	ndx_call_fn_t next, void *next_ud, void *ud);
-
-/**
- * @brief Register a middleware interceptor for @p hook_name in the caller's
- * current region.
- *
- * Interceptors are called outermost-first (root → target region).  Each
- * interceptor may inspect/modify args and ret, call @p next to continue, or
- * return early to block.
- */
-typedef int ndx_intercept_t(const char *hook_name,
-                             ndx_interceptor_fn_t *fn, void *ud);
 
 /**
  * @brief Claim handler type.
@@ -472,9 +422,7 @@ typedef uint64_t ndx_current_region_t(void);
 ndx_areg_t   ndx_areg;
 ndx_call_t   ndx_call;
 ndx_last_t   ndx_last;
-ndx_pledge_t ndx_pledge;
 ndx_deny_t           ndx_deny;
-ndx_intercept_t      ndx_intercept;
 ndx_require_claim_t  ndx_require_claim;
 ndx_region_each_t    ndx_region_each;
 ndx_with_region_t    ndx_with_region;
@@ -499,7 +447,7 @@ ndx_load_t ndx_load;
  *  - Calls the module's ndx_uninstall() export (if present); if it returns
  *    non-zero the unload is aborted and NDX_ERR_EPERM is returned.
  *  - Recursively unloads child modules whose reference count would reach zero.
- *  - Removes deny/pledge/intercept entries registered by the module.
+ *  - Removes deny entries registered by the module.
  *  - Invalidates cached function pointers across all other modules.
  *  - Calls dlclose() and frees internal bookkeeping.
  *
@@ -555,23 +503,6 @@ ndx_strerror_t ndx_strerror;
 
 void ndx_init(void);
 
-/**
- * @brief Set the current caller identity for pledge enforcement.
- *
- * Called automatically by the NDX_CALL macro. Not intended for direct use.
- */
-ndx_set_caller_t ndx_set_caller;
-
-/**
- * @brief Per-translation-unit caller path for pledge enforcement.
- *
- * Defaults to NULL (unrestricted host context). Overridden in ndx-mod.h.
- * The NDX_CALL macro passes this to ndx_set_caller before each dispatch.
- */
-#ifndef __NDX_CALLER_PATH_DEFINED__
-static UNUSED const char *__ndx_caller_path__ = NULL;
-#endif
-
 struct ndx_ctx {
 	ndx_call_t       *call;
 	ndx_areg_t       *areg;
@@ -583,15 +514,10 @@ struct ndx_ctx {
 	ndx_shutdown_t   *shutdown;
 	/** @brief Path this module was loaded from; set by host, read-only to module */
 	const char       *module_path;
-	/** @brief Pledge exclusive call rights to a hook (scoped to caller's region) */
-	ndx_pledge_t     *pledge;
-	/** @brief Internal: set caller identity before dispatch */
-	ndx_set_caller_t *set_caller;
 	/** @brief Region ID assigned to this module at load time */
 	uint64_t          region_id;
 	/* region management API */
 	ndx_deny_t            *deny;
-	ndx_intercept_t       *intercept;
 	ndx_require_claim_t   *require_claim;
 	ndx_region_each_t     *region_each;
 	ndx_with_region_t     *with_region;

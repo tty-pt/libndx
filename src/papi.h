@@ -18,18 +18,6 @@ typedef struct ndx_deny_entry {
 } ndx_deny_entry_t;
 
 /*
- * Interceptor entry: middleware-pattern hook interceptor registered on a
- * region for a specific hook name.
- */
-typedef struct ndx_interceptor_entry {
-	char                    *hook_name; /* owned */
-	int                      hook_id;    /* cached hook ID, -1 if unresolved */
-	ndx_interceptor_fn_t    *fn;
-	void                    *ud;
-	struct ndx_interceptor_entry *next;
-} ndx_interceptor_entry_t;
-
-/*
  * Internal region descriptor.
  *
  * Region IDs are plain opaque uint64_t prefix values — all 64 bits are
@@ -61,10 +49,6 @@ typedef struct ndx_region_entry {
 	ndx_deny_entry_t         *denied_modules; /* interned module paths blocked here */
 	unsigned                  denied_hooks_set;   /* qmap hash set: hook name -> sentinel */
 	unsigned                  denied_modules_set; /* qmap hash set: interned path ptr -> sentinel */
-	ndx_interceptor_entry_t  *interceptors;   /* middleware chain (head) */
-
-	unsigned                  pledge_hd;      /* per-region qmap: hook name -> owner */
-	unsigned                  pledge_ids_hd;  /* per-region qmap: hook id -> owner */
 
 	/* Cached flags — set whenever the corresponding field becomes non-NULL/non-zero.
 	 * Propagated upward through the ancestor chain so ndx_call can skip the
@@ -72,10 +56,8 @@ typedef struct ndx_region_entry {
 	 * Packed into one byte so the hot-path check is a single load + AND. */
 	uint8_t                   subtree_flags;
 #define NDX_SUBTREE_HAS_DENY         0x01u
-#define NDX_SUBTREE_HAS_PLEDGE       0x02u
-#define NDX_SUBTREE_HAS_INTERCEPTORS 0x04u
-#define NDX_SUBTREE_SECURITY_MASK    (NDX_SUBTREE_HAS_DENY | NDX_SUBTREE_HAS_PLEDGE)
-#define NDX_SUBTREE_ANY_MASK         (NDX_SUBTREE_HAS_DENY | NDX_SUBTREE_HAS_PLEDGE | NDX_SUBTREE_HAS_INTERCEPTORS)
+#define NDX_SUBTREE_SECURITY_MASK    NDX_SUBTREE_HAS_DENY
+#define NDX_SUBTREE_ANY_MASK         NDX_SUBTREE_HAS_DENY
 
 	ndx_claim_handler_fn_t   *claim_handler;
 	void                     *claim_handler_ud;
@@ -160,12 +142,9 @@ typedef struct ndx_t_s {
 	ndx_last_t               *last;
 	ndx_shutdown_t           *shutdown;
 	const char               *module_path;
-	ndx_pledge_t             *pledge;
-	ndx_set_caller_t         *set_caller;
 	uint64_t                  region_id;
 	/* region management API */
 	ndx_deny_t               *deny;
-	ndx_intercept_t          *intercept;
 	ndx_require_claim_t      *require_claim;
 	ndx_region_each_t        *region_each;
 	ndx_with_region_t        *with_region;

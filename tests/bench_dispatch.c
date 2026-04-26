@@ -6,7 +6,6 @@
  *   - alternating hook invocation (hook transition, memcpy path)
  *   - nested dispatch (same-module nested ndx_call)
  *   - cross-module nested dispatch (the SIGSEGV regression shape)
- *   - intercepted dispatch (slow path via middleware)
  *
  * Pair with: `make bench`. Runs with TSC/monotonic, N iterations each.
  * Not a regression test — ns/call numbers print for A/B comparison.
@@ -20,14 +19,6 @@
 #include "mods/ptr_args.h"
 
 NDX_HOOK_DECL(const char *, ptr_resolve_remote, int, which);
-
-static int
-interceptor_trivial(const char *hook, void *args, void *ret,
-                    void (*next)(void *, void *, void *), void *next_ud, void *ud)
-{
-	(void)hook; (void)args; (void)ret; (void)next; (void)next_ud; (void)ud;
-	return 0;
-}
 
 #define ITER_WARM    10000
 #define ITER_MEASURE 2000000
@@ -111,28 +102,6 @@ bench_cross_module_nested(void)
 	printf("  bench_cross_mod_nested%8.2f ns/call  (poem->auth->auth shape)\n", ns);
 }
 
-static void
-bench_intercepted(void)
-{
-	/* Force slow path: register an interceptor on ptr_len */
-	int rc = ndx_intercept("ptr_len", interceptor_trivial, NULL);
-	assert(rc == 0);
-
-	/* Warm */
-	for (int i = 0; i < ITER_WARM; i++) (void)ptr_len("warmup");
-
-	uint64_t t0 = now_ns();
-	int sum = 0;
-	for (int i = 0; i < ITER_MEASURE; i++) {
-		int n = ptr_len("test");
-		sum += n;
-	}
-	uint64_t t1 = now_ns();
-	(void)sum;
-	double ns = (double)(t1 - t0) / ITER_MEASURE;
-	printf("  bench_intercepted    %8.2f ns/call  (slow path with interceptor)\n", ns);
-}
-
 int
 main(void)
 {
@@ -147,7 +116,6 @@ main(void)
 	bench_alternating();
 	bench_nested();
 	bench_cross_module_nested();
-	bench_intercepted();
 
 	return 0;
 }

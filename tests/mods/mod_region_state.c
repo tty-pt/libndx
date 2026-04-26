@@ -16,7 +16,7 @@ NDX_LISTENER(int, rs_get,       int, dummy);
 NDX_REGION_STATE {
 	int counter;
 };
-NDX_REGION_INIT;
+NDX_REGION_INIT
 
 /* Global cleanup flag — test reads this to verify cleanup was called */
 MODULE_API int rs_cleanup_called = 0;

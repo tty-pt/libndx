@@ -5,6 +5,7 @@
 NDX_LISTENER(int, init_order_check, int, dummy);
 
 int init_order_check(int dummy) {
+	(void)dummy;
     return 0;
 }
 

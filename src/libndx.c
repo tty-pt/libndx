@@ -62,8 +62,6 @@ enum opts {
 unsigned mod_hd,            /* module key -> ndx_mod_entry_t* */
          mod_by_region_hd,  /* region_id (uint64_t) -> ndx_mod_entry_t* (MULTIVALUE) */
          sica_hd,           /* hook name  -> ndx_adapter_t*   */
-         pledge_hd,         /* hook name  -> owner path (global/root pledge) */
-         pledge_ids_hd,     /* hook id    -> owner path (global/root pledge) */
          path_intern_hd,    /* canonical module path -> interned path pointer */
          region_hd;         /* region key -> ndx_region_entry_t* */
 
@@ -114,19 +112,12 @@ static void module_rekey_loaded_entry(ndx_mod_entry_t *me, const char *old_key,
 /* Running count of successfully loaded modules (for alloca sizing in ndx_call) */
 static int ndx_mod_count;
 
-/* Running count of registered pledges (root + region-scoped combined).
- * Used to skip the pledge_hd hash lookup entirely when no pledges exist. */
-static int ndx_pledge_count;
-
 /* T1.5: Per-call mutable state extracted from ndx_last_adapter to
  * avoid the 88-byte memcpy on fast path. ndx_last() reads these instead
  * of the full struct. */
 static __thread unsigned ndx_last_ran;
 static __thread char     ndx_last_retbuf[NDX_MAX_RET_SIZE];
 static __thread void    *ndx_last_retp;
-
-/* Thread-local caller identity (for pledge enforcement) */
-static __thread const char *ndx_current_caller;
 
 /* Thread-local current region — id and a direct pointer kept in sync.
  * ndx_current_region_entry may be NULL before the first ndx_init_once() call;
@@ -291,21 +282,6 @@ region_store(ndx_region_entry_t *entry)
 	qmap_put(region_hd, &entry->id, &entry);
 }
 
-static void
-interceptors_set_hook_id_for_name(const char *hook_name, int hook_id)
-{
-	unsigned c = qmap_iter(region_hd, NULL, 0);
-	const void *key, *value;
-	while (qmap_next(&key, &value, c)) {
-		ndx_region_entry_t *re = qmap_ptr(value);
-		for (ndx_interceptor_entry_t *ic = re ? re->interceptors : NULL;
-		     ic; ic = ic->next) {
-			if (ic->hook_id < 0 && strcmp(ic->hook_name, hook_name) == 0)
-				ic->hook_id = hook_id;
-		}
-	}
-}
-
 static const char *
 module_path_intern(char *path)
 {
@@ -334,40 +310,6 @@ path_intern_free_all(void)
 		return;
 	qmap_close(path_intern_hd);
 	path_intern_hd = 0;
-}
-
-static void
-pledges_set_hook_id_for_name(const char *hook_name, int hook_id)
-{
-	if (hook_id < 0)
-		return;
-
-	const char *owner;
-
-	owner = qmap_ptr(qmap_get(pledge_hd, hook_name));
-	if (owner) {
-		if (!pledge_ids_hd)
-			pledge_ids_hd = qmap_open(NULL, NULL, ndx_int_type, ndx_ptr_type,
-			                         MOD_MASK, 0);
-		qmap_put(pledge_ids_hd, &hook_id, &owner);
-		qmap_del(pledge_hd, hook_name);
-	}
-
-	unsigned c = qmap_iter(region_hd, NULL, 0);
-	const void *key, *value;
-	while (qmap_next(&key, &value, c)) {
-		ndx_region_entry_t *re = qmap_ptr(value);
-		if (!re || !re->pledge_hd)
-			continue;
-		owner = qmap_ptr(qmap_get(re->pledge_hd, hook_name));
-		if (!owner)
-			continue;
-		if (!re->pledge_ids_hd)
-			re->pledge_ids_hd = qmap_open(NULL, NULL, ndx_int_type,
-			                              ndx_ptr_type, MOD_MASK, 0);
-		qmap_put(re->pledge_ids_hd, &hook_id, &owner);
-		qmap_del(re->pledge_hd, hook_name);
-	}
 }
 
 /*
@@ -409,20 +351,6 @@ region_propagate_deny(ndx_region_entry_t *entry)
 		e->subtree_flags |= NDX_SUBTREE_HAS_DENY;
 }
 
-static inline void
-region_propagate_pledge(ndx_region_entry_t *entry)
-{
-	for (ndx_region_entry_t *e = entry; e; e = e->parent)
-		e->subtree_flags |= NDX_SUBTREE_HAS_PLEDGE;
-}
-
-static inline void
-region_propagate_interceptors(ndx_region_entry_t *entry)
-{
-	for (ndx_region_entry_t *e = entry; e; e = e->parent)
-		e->subtree_flags |= NDX_SUBTREE_HAS_INTERCEPTORS;
-}
-
 static void
 deny_list_free(ndx_deny_entry_t *head)
 {
@@ -445,27 +373,11 @@ deny_list_free_owned(ndx_deny_entry_t *head)
 }
 
 static void
-interceptor_list_free(ndx_interceptor_entry_t *head)
-{
-	while (head) {
-		ndx_interceptor_entry_t *next = head->next;
-		free(head->hook_name);
-		free(head);
-		head = next;
-	}
-}
-
-static void
 region_entry_free(ndx_region_entry_t *e)
 {
 	if (!e) return;
 	deny_list_free_owned(e->denied_hooks);
 	deny_list_free(e->denied_modules);
-	interceptor_list_free(e->interceptors);
-	if (e->pledge_ids_hd)
-		qmap_close(e->pledge_ids_hd);
-	if (e->pledge_hd)
-		qmap_close(e->pledge_hd);
 	free(e->subtree_mods);
 	free(e);
 }
@@ -753,31 +665,6 @@ module_handle_base(void *handle)
 }
 
 static void
-module_remove_owner_keys(unsigned map_hd, const char *path, int *count)
-{
-	unsigned pc = qmap_iter(map_hd, NULL, 0);
-	const void *pk, *pv;
-	const char **del_keys = NULL;
-	int ndel = 0, del_cap = 0;
-	while (qmap_next(&pk, &pv, pc)) {
-		const char *owner = qmap_ptr(pv);
-		if (owner && strcmp(owner, path) == 0) {
-			if (ndel >= del_cap) {
-				del_cap = del_cap ? del_cap * 2 : 4;
-				del_keys = realloc(del_keys, del_cap * sizeof(char *));
-			}
-			del_keys[ndel++] = (const char *)pk;
-		}
-	}
-	for (int i = 0; i < ndel; i++) {
-		qmap_del(map_hd, del_keys[i]);
-		if (count)
-			(*count)--;
-	}
-	free(del_keys);
-}
-
-static void
 module_remove_denies(ndx_region_entry_t *re, const char *path)
 {
 	if (!re || !path)
@@ -808,27 +695,6 @@ module_is_denied(ndx_region_entry_t *re, const char *path)
 			return 1;
 	}
 	return 0;
-}
-
-static void
-module_remove_interceptors(ndx_region_entry_t *re, void *base)
-{
-	if (!re || !base)
-		return;
-
-	ndx_interceptor_entry_t **ip = &re->interceptors;
-	while (*ip) {
-		void *fn_ptr;
-		memcpy(&fn_ptr, &(*ip)->fn, sizeof(fn_ptr));
-		if (module_base_from_symbol(fn_ptr) == base) {
-			ndx_interceptor_entry_t *dead = *ip;
-			*ip = dead->next;
-			free(dead->hook_name);
-			free(dead);
-			continue;
-		}
-		ip = &(*ip)->next;
-	}
 }
 
 static void
@@ -921,7 +787,6 @@ typedef struct {
 	uint64_t            inherited_region_id;
 	uint64_t            prev_region_id;
 	ndx_region_entry_t *prev_region_entry;
-	const char         *prev_caller;
 	unsigned            phases;
 } ndx_load_txn_t;
 
@@ -941,7 +806,6 @@ mod_load_restore_context(ndx_load_txn_t *tx)
 	if (!tx || !(tx->phases & NDX_LOAD_CONTEXT_ACTIVE))
 		return;
 	set_current_region(tx->prev_region_id, tx->prev_region_entry);
-	ndx_current_caller = tx->prev_caller;
 	tx->phases &= ~NDX_LOAD_CONTEXT_ACTIVE;
 }
 
@@ -1073,9 +937,7 @@ mod_load_enter_context(ndx_load_txn_t *tx)
 	tx->inherited_reg = region_lookup(tx->inherited_region_id);
 	tx->prev_region_id = ndx_current_region_id;
 	tx->prev_region_entry = ndx_current_region_entry;
-	tx->prev_caller = ndx_current_caller;
 	set_current_region(tx->inherited_region_id, tx->inherited_reg);
-	ndx_current_caller = tx->stable_fname;
 	tx->phases |= NDX_LOAD_CONTEXT_ACTIVE;
 	return NDX_OK;
 }
@@ -1109,51 +971,13 @@ mod_load_run_install(ndx_load_txn_t *tx)
 }
 
 static void
-mod_load_attach_region_state(ndx_load_txn_t *tx)
-{
-	typedef size_t ndx_region_state_size_t(void);
-	ndx_region_state_size_t *sz_fn = NULL;
-
-	module_lookup_symbol_fn(tx->handle, "ndx_region_state_size", &sz_fn, sizeof(sz_fn));
-	if (!sz_fn)
-		return;
-
-	size_t sz = sz_fn();
-	if (sz > 0)
-		tx->mod_entry->region_state = calloc(1, sz);
-}
-
-static void
-mod_load_attach_region(ndx_load_txn_t *tx)
-{
-	ndx_region_entry_t *re = region_lookup(tx->mod_entry->region_id);
-
-	if (re)
-		module_region_append(re, tx->mod_entry);
-}
-
-static void
-mod_load_prewarm_entry(ndx_load_txn_t *tx)
-{
-	(void)fn_cache_prewarm(tx->mod_entry);
-}
-
-/*
- * Remove all entries owned by a module path from a region and from the root
- * pledge map.  The caller passes the region entry and path because unload
- * already has both on hand.
- */
-static void
 module_remove_path_owned_entries(ndx_region_entry_t *re, const char *path,
-                                 void *handle)
+                                 void *handle UNUSED)
 {
 	if (!re || !path)
 		return;
 
 	module_remove_denies(re, path);
-	module_remove_interceptors(re, module_handle_base(handle));
-	module_remove_owner_keys(re->pledge_hd, path, &ndx_pledge_count);
-	module_remove_owner_keys(pledge_hd, path, &ndx_pledge_count);
 }
 
 /*
@@ -1193,82 +1017,6 @@ const char *ndx_strerror(int err) {
 	case NDX_ERR_EPERM:    return "operation not permitted";
 	default:               return "unknown error";
 	}
-}
-
-/* -------------------------------------------------------------------------
- * Caller / region identity
- * ------------------------------------------------------------------------- */
-
-void ndx_set_caller(const char *module_path) {
-	ndx_current_caller = module_path;
-}
-
-/* -------------------------------------------------------------------------
- * Pledge (region-scoped; caller's current region at pledge time)
- * ------------------------------------------------------------------------- */
-
-int ndx_pledge(const char *hook_name) {
-	ndx_init_once();
-	const char *caller = ndx_current_caller;
-	if (!caller) {
-		NDX_SET_ERR(NDX_ERR_INVALID);
-		return NDX_ERR_INVALID;
-	}
-	const void *hid_v = qmap_get(hook_id_hd, hook_name);
-	int hook_id = hid_v ? *(const int *)hid_v : -1;
-
-	/* Scope: the caller's current region */
-	uint64_t scope = ndx_current_region_id;
-
-	if (scope == NDX_REGION_ROOT) {
-		/* Root-scope: use the legacy global pledge map */
-		if ((hook_id >= 0 && pledge_ids_hd && qmap_get(pledge_ids_hd, &hook_id)) ||
-		    qmap_get(pledge_hd, hook_name)) {
-			NDX_SET_ERR(NDX_ERR_EPERM);
-			return NDX_ERR_EPERM;
-		}
-		if (hook_id >= 0) {
-			if (!pledge_ids_hd)
-				pledge_ids_hd = qmap_open(NULL, NULL, ndx_int_type,
-				                          ndx_ptr_type, MOD_MASK, 0);
-			qmap_put(pledge_ids_hd, &hook_id, &caller);
-		} else {
-			qmap_put(pledge_hd, hook_name, &caller);
-		}
-		ndx_pledge_count++;
-		NDX_SET_ERR(NDX_OK);
-		return NDX_OK;
-	}
-
-	/* Non-root scope: use the region's pledge map */
-	ndx_region_entry_t *reg = region_lookup(scope);
-	if (!reg) {
-		NDX_SET_ERR(NDX_ERR_NOTFOUND);
-		return NDX_ERR_NOTFOUND;
-	}
-	if (!reg->pledge_hd) {
-		reg->pledge_hd = qmap_open(NULL, NULL, QM_STR, ndx_ptr_type,
-		                           MOD_MASK, 0);
-	}
-	if ((hook_id >= 0 && reg->pledge_ids_hd &&
-	     qmap_get(reg->pledge_ids_hd, &hook_id)) ||
-	    qmap_get(reg->pledge_hd, hook_name)) {
-		NDX_SET_ERR(NDX_ERR_EPERM);
-		return NDX_ERR_EPERM;
-	}
-	if (hook_id >= 0) {
-		if (!reg->pledge_ids_hd) {
-			reg->pledge_ids_hd = qmap_open(NULL, NULL, ndx_int_type,
-			                               ndx_ptr_type, MOD_MASK, 0);
-		}
-		qmap_put(reg->pledge_ids_hd, &hook_id, &caller);
-	} else {
-		qmap_put(reg->pledge_hd, hook_name, &caller);
-	}
-	region_propagate_pledge(reg);
-	ndx_pledge_count++;
-	NDX_SET_ERR(NDX_OK);
-	return NDX_OK;
 }
 
 /* -------------------------------------------------------------------------
@@ -1469,36 +1217,6 @@ int ndx_deny(const char *what, ndx_deny_type_t type) {
 }
 
 /* -------------------------------------------------------------------------
- * Region interceptor registration
- * ------------------------------------------------------------------------- */
-
-int ndx_intercept(const char *hook_name,
-                  ndx_interceptor_fn_t *fn, void *ud) {
-	ndx_init_once();
-	ndx_region_entry_t *reg = region_lookup(ndx_current_region_id);
-	if (!reg) {
-		NDX_SET_ERR(NDX_ERR_NOTFOUND);
-		return NDX_ERR_NOTFOUND;
-	}
-
-	ndx_interceptor_entry_t *node = malloc(sizeof(*node));
-	node->hook_name = strdup(hook_name);
-	node->hook_id   = -1;
-	node->fn        = fn;
-	node->ud        = ud;
-	const void *hid_v = qmap_get(hook_id_hd, hook_name);
-	if (hid_v)
-		node->hook_id = *(const int *)hid_v;
-	/* Prepend; chain is walked root-first so we reverse at call time */
-	node->next = reg->interceptors;
-	reg->interceptors = node;
-	region_propagate_interceptors(reg);
-
-	NDX_SET_ERR(NDX_OK);
-	return NDX_OK;
-}
-
-/* -------------------------------------------------------------------------
  * ndx_region_each — enumerate immediate children of caller's current region
  * ------------------------------------------------------------------------- */
 
@@ -1593,11 +1311,8 @@ void _ndx_init(void *ptr, const char *fname,
 	indx->last             = ndx_last;
 	indx->shutdown         = ndx_shutdown;
 	indx->module_path      = fname;
-	indx->pledge           = ndx_pledge;
-	indx->set_caller       = ndx_set_caller;
 	indx->region_id        = region_id;
 	indx->deny             = ndx_deny;
-	indx->intercept        = ndx_intercept;
 	indx->require_claim    = ndx_require_claim;
 	indx->region_each      = ndx_region_each;
 	indx->with_region      = ndx_with_region;
@@ -1645,9 +1360,22 @@ int _mod_load(char *fname) {
 		goto fail;
 
 	ndx_mod_count++;
-	mod_load_attach_region_state(&tx);
-	mod_load_attach_region(&tx);
-	mod_load_prewarm_entry(&tx);
+	{
+		typedef size_t ndx_region_state_size_t(void);
+		ndx_region_state_size_t *sz_fn = NULL;
+		module_lookup_symbol_fn(tx.handle, "ndx_region_state_size", &sz_fn, sizeof(sz_fn));
+		if (sz_fn) {
+			size_t sz = sz_fn();
+			if (sz > 0)
+				tx.mod_entry->region_state = calloc(1, sz);
+		}
+	}
+	{
+		ndx_region_entry_t *re = region_lookup(tx.mod_entry->region_id);
+		if (re)
+			module_region_append(re, tx.mod_entry);
+	}
+	(void)fn_cache_prewarm(tx.mod_entry);
 	mod_load_restore_context(&tx);
 	module_lookup_result_free(&tx.lookup);
 	tx.phases &= ~NDX_LOAD_HAVE_LOOKUP;
@@ -1856,47 +1584,18 @@ int ndx_last(void *ret) {
  * ------------------------------------------------------------------------- */
 
 /*
- * Interceptor chain state passed through the middleware.
- */
-typedef struct {
-	ndx_interceptor_entry_t **chain;
-	int                       chain_len;
-	int                       chain_pos;
-	const char               *hook_name;
-	ndx_adapter_t            *adapter;
-	uint64_t                  region_id;
-	unsigned                 *ran_out;
-	ndx_mod_entry_t         **entries;
-	int                       entry_count;
-	int                       hook_id;   /* pre-resolved at ndx_call time */
-	int                       abort_err; /* non-zero → abort the chain (OOM etc.) */
-} ndx_dispatch_ctx_t;
-
-/* Keep dispatch context compact; grows only with deliberate review. */
-_Static_assert(sizeof(ndx_dispatch_ctx_t) <= 72,
-               "ndx_dispatch_ctx_t grew — review hot-path cache footprint");
-
-/* Practical stack-bound cap for one dispatch chain. Real use is much lower,
- * and keeping this near the region-depth scale avoids pointless stack bloat. */
-#define MAX_INTERCEPTORS 64
-
-/*
  * fn_cache_resolve — lazy per-module, per-hook dlsym cache.
  *
  * DISPATCH-SAFETY INVARIANT: this helper is called from inside the DFS
- * dispatch loops of both the fast path (ndx_call) and the slow path
- * (dispatch_next). It MUST NOT read ndx_last_adapter.* — that TLS slot is
- * overwritten whenever a module body nested-calls another hook via
+ * dispatch loop of ndx_call. It MUST NOT read ndx_last_adapter.* — that TLS
+ * slot is overwritten whenever a module body nested-calls another hook via
  * ndx_call, and we are mid-iteration of the *outer* call.
  *
- * Caller must supply hook_id and name from a stable source: the caller's
- * stack (reg->hook_id / reg->name in the fast path) or a ctx-local adapter
- * copy (ctx->adapter->hook_id / ctx->adapter->name in the slow path).
+ * Caller must supply hook_id and name from a stable source on its stack.
  *
  * Returns resolved callback, or NULL if the module does not export this
  * hook. Returns (void *)-1 (cast via NDX_FN_RESOLVE_OOM) if cache growth
- * fails; caller treats this as abort (fast path returns NDX_ERR_INVALID,
- * slow path sets ctx->abort_err).
+ * fails; caller treats this as abort (returns NDX_ERR_INVALID).
  */
 #define NDX_FN_RESOLVE_OOM ((void *)(uintptr_t)-1)
 
@@ -1949,10 +1648,9 @@ fn_cache_prewarm(ndx_mod_entry_t *me)
 }
 
 /*
- * ndx_dispatch_module — single per-module dispatch step shared by the
- * fast path (ndx_call inner DFS loop) and the slow path (dispatch_next).
+ * ndx_dispatch_module — single per-module dispatch step used by ndx_call.
  *
- * always_inline guarantees zero call overhead at both sites; commit_ret
+ * always_inline guarantees zero call overhead; commit_ret
  * is a compile-time constant per call site so its branch is folded away.
  *
  * Returns:
@@ -1961,10 +1659,10 @@ fn_cache_prewarm(ndx_mod_entry_t *me)
  *                        me->indx is NULL)
  *   NDX_ERR_INVALID    → fn_cache growth failed; caller propagates per
  *                        its dispatch context (fast path: set errno +
- *                        return; slow path: set ctx->abort_err + return)
+ *                        return
  *
  * DISPATCH-SAFETY INVARIANT: helper takes hook_id/name/adapter as
- * parameters from caller's stack/ctx. It does NOT read ndx_last_adapter.
+ * parameters from caller's stack. It does NOT read ndx_last_adapter.
  * See fn_cache_resolve comment.
  */
 static inline int __attribute__((always_inline, hot))
@@ -2004,61 +1702,11 @@ ndx_dispatch_module(ndx_mod_entry_t *me,
 	return 0;
 }
 
-static void dispatch_next(void *args, void *ret, void *ud);
-
-static void
-dispatch_next(void *args, void *ret, void *ud)
-{
-	ndx_dispatch_ctx_t *ctx = ud;
-
-	if (ctx->chain_pos < ctx->chain_len) {
-		ndx_interceptor_entry_t *ic = ctx->chain[ctx->chain_pos++];
-		ic->fn(ctx->hook_name, args, ret,
-		       dispatch_next, ctx, ic->ud);
-		return;
-	}
-
-	for (int i = 0; i < ctx->entry_count; i++) {
-		ndx_mod_entry_t *me = ctx->entries[i];
-		int rc = ndx_dispatch_module(me,
-		                             ctx->adapter->hook_id,
-		                             ctx->adapter->name,
-		                             ctx->adapter,
-		                             ctx->adapter->call,
-		                             ret, args,
-		                             /*commit_ret=*/1,
-		                             ctx->region_id);
-		if (unlikely(rc == NDX_ERR_INVALID)) {
-			ctx->abort_err = NDX_ERR_INVALID;
-			return;
-		}
-		if (rc == 0) (*ctx->ran_out)++;
-	}
-}
-
-static void __attribute__((cold, noinline))
-ndx_warn_pledge_root(const char *caller, const char *name, const char *owner)
-{
-	WARN("ndx_call: pledge violation — '%s' called '%s' (owner: '%s')\n",
-		caller ? caller : "(unknown)", name, owner);
-}
-
-static void __attribute__((cold, noinline))
-ndx_warn_pledge_region(const char *caller, const char *name,
-                       unsigned long long rid, const char *owner)
-{
-	WARN("ndx_call: pledge violation — '%s' called '%s' in region %llu"
-	     " (owner: '%s')\n",
-	     caller ? caller : "(unknown)", name, rid, owner);
-}
-
 typedef struct {
 	int                 hook_id;
-	int                 pledge_hook_id;
 	void              (*dispatch_call)(void *, void *, void *);
 	ndx_region_entry_t *caller_region_entry;
-	int                 has_deny_pledge;
-	int                 has_interceptors;
+	int                 has_denies;
 	ndx_region_entry_t *anc_chain[65];
 	int                 anc_n;
 } ndx_call_plan_t;
@@ -2067,7 +1715,6 @@ typedef struct {
 	void               *retp;
 	ndx_adapter_t      *reg;
 	void               *arg;
-	const char         *caller;
 	uint64_t            region_id;
 	int                 pre_err;
 	int                 ret;
@@ -2077,8 +1724,6 @@ typedef struct {
 
 static int
 ndx_call_run_fast(ndx_call_ctx_t *ctx);
-static int
-ndx_call_run_slow(ndx_call_ctx_t *ctx);
 
 static int
 ndx_call_resolve_region(ndx_call_ctx_t *ctx)
@@ -2089,8 +1734,7 @@ ndx_call_resolve_region(ndx_call_ctx_t *ctx)
 
 	uint8_t sflags = caller_region_entry ? caller_region_entry->subtree_flags : 0;
 	ctx->plan.caller_region_entry = caller_region_entry;
-	ctx->plan.has_deny_pledge = (sflags & NDX_SUBTREE_SECURITY_MASK) != 0;
-	ctx->plan.has_interceptors = (sflags & NDX_SUBTREE_HAS_INTERCEPTORS) != 0;
+	ctx->plan.has_denies = (sflags & NDX_SUBTREE_SECURITY_MASK) != 0;
 	ctx->plan.anc_n = 0;
 
 	if (unlikely(sflags & NDX_SUBTREE_ANY_MASK) && caller_region_entry)
@@ -2104,13 +1748,6 @@ ndx_call_prepare(ndx_call_ctx_t *ctx)
 {
 	ndx_adapter_t *reg = ctx->reg;
 	int hook_id = reg->hook_id;
-	int pledge_hook_id = hook_id;
-
-	if (unlikely(ndx_pledge_count > 0 && pledge_hook_id < 0)) {
-		const void *hid_v = qmap_get(hook_id_hd, reg->name);
-		if (hid_v)
-			pledge_hook_id = *(const int *)hid_v;
-	}
 
 	if (unlikely(hook_id < 0)) {
 		const void *hid_v = qmap_get(hook_id_hd, reg->name);
@@ -2140,34 +1777,7 @@ ndx_call_prepare(ndx_call_ctx_t *ctx)
 		return NDX_ERR_NOTFOUND;
 
 	ctx->plan.hook_id = hook_id;
-	ctx->plan.pledge_hook_id = pledge_hook_id;
 	ctx->plan.dispatch_call = dispatch_call;
-	return NDX_OK;
-}
-
-static int
-ndx_call_check_root_pledge(ndx_call_ctx_t *ctx)
-{
-	ndx_adapter_t *reg = ctx->reg;
-	const char *caller = ctx->caller;
-
-	if (likely(ndx_pledge_count == 0))
-		return NDX_OK;
-
-	ndx_current_caller = caller;
-	const char *global_pledge_owner = NULL;
-	if (ctx->plan.pledge_hook_id >= 0 && pledge_ids_hd)
-		global_pledge_owner = qmap_ptr(qmap_get(pledge_ids_hd, &ctx->plan.pledge_hook_id));
-	if (!global_pledge_owner)
-		global_pledge_owner = qmap_ptr(qmap_get(pledge_hd, reg->name));
-	if (global_pledge_owner) {
-		const char *current_caller = ndx_current_caller;
-		if (!current_caller || strcmp(current_caller, global_pledge_owner) != 0) {
-			ndx_warn_pledge_root(current_caller, reg->name, global_pledge_owner);
-			return NDX_ERR_EPERM;
-		}
-	}
-
 	return NDX_OK;
 }
 
@@ -2175,32 +1785,14 @@ static int
 ndx_call_check_region_security(ndx_call_ctx_t *ctx)
 {
 	ndx_adapter_t *reg = ctx->reg;
-	const char *caller = ctx->caller;
 
-	if (likely(!ctx->plan.has_deny_pledge))
+	if (likely(!ctx->plan.has_denies))
 		return NDX_OK;
 
-	ndx_current_caller = caller;
 	for (int i = 0; i < ctx->plan.anc_n; i++) {
 		if (ctx->plan.anc_chain[i]->denied_hooks_set &&
 		    qmap_get(ctx->plan.anc_chain[i]->denied_hooks_set, reg->name))
 			return NDX_ERR_EPERM;
-		if (ctx->plan.anc_chain[i]->pledge_ids_hd || ctx->plan.anc_chain[i]->pledge_hd) {
-			const char *rp_owner = NULL;
-			if (ctx->plan.pledge_hook_id >= 0 && ctx->plan.anc_chain[i]->pledge_ids_hd)
-				rp_owner = qmap_ptr(qmap_get(ctx->plan.anc_chain[i]->pledge_ids_hd,
-				                             &ctx->plan.pledge_hook_id));
-			if (!rp_owner && ctx->plan.anc_chain[i]->pledge_hd)
-				rp_owner = qmap_ptr(qmap_get(ctx->plan.anc_chain[i]->pledge_hd, reg->name));
-			if (rp_owner) {
-				if (!caller || strcmp(caller, rp_owner) != 0) {
-					ndx_warn_pledge_region(caller, reg->name,
-					                       (unsigned long long)ctx->plan.anc_chain[i]->id,
-					                       rp_owner);
-					return NDX_ERR_EPERM;
-				}
-			}
-		}
 	}
 
 	return NDX_OK;
@@ -2209,10 +1801,7 @@ ndx_call_check_region_security(ndx_call_ctx_t *ctx)
 static int
 ndx_call_check_security(ndx_call_ctx_t *ctx)
 {
-	int ret = ndx_call_check_root_pledge(ctx);
-	if (ret != NDX_OK)
-		return ret;
-	ret = ndx_call_resolve_region(ctx);
+	int ret = ndx_call_resolve_region(ctx);
 	if (ret != NDX_OK)
 		return ret;
 	return ndx_call_check_region_security(ctx);
@@ -2248,8 +1837,6 @@ ndx_call_publish_err(ndx_call_ctx_t *ctx)
 static int
 ndx_call_dispatch(ndx_call_ctx_t *ctx)
 {
-	if (ctx->plan.has_interceptors)
-		return ndx_call_run_slow(ctx);
 	return ndx_call_run_fast(ctx);
 }
 
@@ -2269,95 +1856,6 @@ ensure_region_dispatch_cache(ndx_region_entry_t *caller_region_entry)
 		if (region_rebuild_subtree_mods(caller_region_entry) < 0)
 			return NDX_ERR_INVALID;
 	}
-	return NDX_OK;
-}
-
-static int
-ndx_call_collect_slow_entries(ndx_call_ctx_t *ctx,
-                              ndx_mod_entry_t **entries, int entry_cap)
-{
-	ndx_region_entry_t *caller_region_entry = ctx->plan.caller_region_entry;
-	if (!caller_region_entry)
-		return 0;
-
-	ndx_mod_entry_t **mods = caller_region_entry->subtree_mods;
-	int n = caller_region_entry->subtree_mods_count;
-	int entry_count = 0;
-
-	for (int mi = 0; mi < n; mi++) {
-		ndx_mod_entry_t *me = mods[mi];
-		if (mi + 1 < n)
-			__builtin_prefetch(mods[mi + 1], 0, 1);
-		if (!me->indx)
-			continue;
-		if (module_denied_by_ancestors(me, ctx->plan.anc_chain, ctx->plan.anc_n))
-			continue;
-		if (entry_count < entry_cap)
-			entries[entry_count++] = me;
-	}
-
-	return entry_count;
-}
-
-static int
-ndx_call_collect_slow_interceptors(ndx_call_ctx_t *ctx,
-                                   ndx_interceptor_entry_t **ic_chain, int ic_cap)
-{
-	int ic_n = 0;
-	ndx_region_entry_t **anc_chain = ctx->plan.anc_chain;
-	int anc_n = ctx->plan.anc_n;
-	int hook_id = ctx->plan.hook_id;
-
-	for (int ai = 0; ai < anc_n && ic_n < ic_cap; ai++) {
-		ndx_region_entry_t *anc = anc_chain[ai];
-		int reg_ic_start = ic_n;
-		for (ndx_interceptor_entry_t *ic = anc->interceptors; ic; ic = ic->next) {
-			if (ic->hook_id == hook_id && ic_n < ic_cap)
-				ic_chain[ic_n++] = ic;
-		}
-		for (int a = reg_ic_start, b = ic_n - 1; a < b; a++, b--) {
-			ndx_interceptor_entry_t *tmp = ic_chain[a];
-			ic_chain[a] = ic_chain[b];
-			ic_chain[b] = tmp;
-		}
-	}
-
-	return ic_n;
-}
-
-static int
-ndx_call_execute_slow(ndx_call_ctx_t *ctx,
-                      ndx_mod_entry_t **entries, int entry_count,
-                      ndx_interceptor_entry_t **ic_chain, int ic_n)
-{
-	ndx_adapter_t adapter;
-	memcpy(&adapter, ctx->reg, offsetof(ndx_adapter_t, ret));
-	adapter.ran = 0;
-	if (unlikely(!adapter.call))
-		adapter.call = ctx->plan.dispatch_call;
-
-	ndx_call_prime_last(&adapter, ctx->retp);
-
-	ndx_dispatch_ctx_t dctx = {
-		.chain        = ic_chain,
-		.chain_len    = ic_n,
-		.chain_pos    = 0,
-		.hook_name    = ctx->reg->name,
-		.adapter      = &adapter,
-		.region_id    = ctx->region_id,
-		.ran_out      = &adapter.ran,
-		.entries      = entries,
-		.entry_count  = entry_count,
-		.hook_id      = ctx->plan.hook_id,
-		.abort_err    = 0,
-	};
-
-	dispatch_next(ctx->arg, ctx->retp, &dctx);
-	if (unlikely(dctx.abort_err))
-		return dctx.abort_err;
-
-	ctx->ran = adapter.ran;
-	ndx_call_publish_ret(ctx, adapter.ret);
 	return NDX_OK;
 }
 
@@ -2382,30 +1880,13 @@ ndx_call_run_fast(ndx_call_ctx_t *ctx)
 		                                   ctx->retp, ctx->arg,
 		                                   ctx->region_id,
 		                                   ctx->plan.anc_chain, ctx->plan.anc_n,
-		                                   ctx->plan.has_deny_pledge);
+		                                   ctx->plan.has_denies);
 		if (unlikely(did_run == NDX_ERR_INVALID))
 			return NDX_ERR_INVALID;
 		ctx->ran += did_run;
 	}
 
 	return NDX_OK;
-}
-
-static int
-ndx_call_run_slow(ndx_call_ctx_t *ctx)
-{
-	if (ensure_region_dispatch_cache(ctx->plan.caller_region_entry) != NDX_OK)
-		return NDX_ERR_INVALID;
-
-	int total_mods = ndx_mod_count;
-	ndx_mod_entry_t **entries = total_mods > 0
-		? alloca(total_mods * sizeof(ndx_mod_entry_t *)) : NULL;
-	int entry_count = ndx_call_collect_slow_entries(ctx, entries, total_mods);
-
-	ndx_interceptor_entry_t *ic_chain[MAX_INTERCEPTORS];
-	int ic_n = ndx_call_collect_slow_interceptors(ctx, ic_chain, MAX_INTERCEPTORS);
-
-	return ndx_call_execute_slow(ctx, entries, entry_count, ic_chain, ic_n);
 }
 
 static int
@@ -2417,7 +1898,7 @@ ndx_call_fail(ndx_call_ctx_t *ctx)
 }
 
 int __attribute__((hot, flatten))
-ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
+ndx_call(void *retp, ndx_adapter_t *reg, void *arg)
 {
 	if (unlikely(!ndx_inited))
 		ndx_init_once();
@@ -2431,7 +1912,6 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg, const char *caller)
 		.retp = retp,
 		.reg = reg,
 		.arg = arg,
-		.caller = caller,
 		.region_id = ndx_current_region_id,
 		.pre_err = NDX_GET_ERR(),
 		.ret = NDX_OK,
@@ -2488,8 +1968,6 @@ ndx_areg(char *name, ndx_adapter_t *adapter)
 		ndx_adapter_by_id_cap = new_cap;
 	}
 	ndx_adapter_by_id[hook_id] = adapter;
-	interceptors_set_hook_id_for_name(name, hook_id);
-	pledges_set_hook_id_for_name(name, hook_id);
 	/* T1.1: a new hook ID has been minted — eagerly resolve it in every
 	 * already-loaded module so the first dispatch finds it cached. */
 	if (mod_hd) {
@@ -2555,10 +2033,7 @@ shared_init(void)
 	ndx.load             = ndx_load;
 	ndx.err              = ndx_errno;
 	ndx.strerror         = ndx_strerror;
-	ndx.pledge           = ndx_pledge;
-	ndx.set_caller       = ndx_set_caller;
 	ndx.deny             = ndx_deny;
-	ndx.intercept        = ndx_intercept;
 	ndx.require_claim    = ndx_require_claim;
 	ndx.region_each      = ndx_region_each;
 	ndx.with_region      = ndx_with_region;
@@ -2601,9 +2076,6 @@ ndx_init_once(void)
 	mod_hd           = qmap_open(NULL, NULL, mod_key_type, ndx_ptr_type, MOD_MASK, 0);
 	mod_by_region_hd = qmap_open(NULL, NULL, region_id_type, ndx_ptr_type,
 	                             MOD_MASK, QM_SORTED | QM_MULTIVALUE);
-	pledge_hd = qmap_open(NULL, NULL, QM_STR, ndx_ptr_type, MOD_MASK, 0);
-	pledge_ids_hd = qmap_open(NULL, NULL, ndx_int_type, ndx_ptr_type,
-	                          MOD_MASK, 0);
 	region_hd = qmap_open(NULL, NULL, region_id_type, ndx_ptr_type, REGION_MASK, 0);
 
 	shared_init();
