@@ -118,40 +118,6 @@ ndx_set_last_ret(const void *retp, size_t ret_size)
 }
 
 int
-module_denied_by_ancestors(ndx_mod_entry_t *me,
-                           ndx_region_entry_t **anc_chain, int anc_n)
-{
-	if (!me || !me->load_path)
-		return 0;
-	for (int i = 0; i < anc_n; i++) {
-		if (module_is_denied(anc_chain[i], me->load_path))
-			return 1;
-	}
-	return 0;
-}
-
-int __attribute__((hot))
-dispatch_fast_module(ndx_mod_entry_t *me,
-                     void *cb,
-                     ndx_adapter_t *reg,
-                     void (*dispatch_call)(void *, void *, void *),
-                     void *retp, void *arg, uint64_t region_id)
-{
-	if (!me || !me->indx)
-		return 0;
-
-	int rc = ndx_dispatch_module(me,
-	                             cb,
-	                             reg,
-	                             dispatch_call,
-	                             retp, arg,
-	                             region_id);
-	if (unlikely(rc == NDX_ERR_INVALID))
-		return NDX_ERR_INVALID;
-	return rc == 0;
-}
-
-int
 module_ensure_hook_impl_words(ndx_mod_entry_t *me, int hook_id)
 {
 	if (!me || hook_id < 0)
@@ -211,13 +177,6 @@ ndx_region_entry_t *
 region_lookup(uint64_t id)
 {
 	return (ndx_region_entry_t *)qmap_ptr(qmap_get(region_hd, &id));
-}
-
-/* Store an ndx_region_entry_t keyed by its id. */
-void
-region_store(ndx_region_entry_t *entry)
-{
-	qmap_put(region_hd, &entry->id, &entry);
 }
 
 const char *
@@ -413,7 +372,7 @@ region_ensure_root(void)
 		root->owner_path = NULL; /* host owns root */
 		root->dispatch_gen = 1;
 		root->parent     = NULL; /* root has no parent */
-		region_store(root);
+		qmap_put(region_hd, &root->id, &root);
 	}
 	/* Always sync the thread-local pointer to the current root entry */
 	if (!ndx_current_region_entry || ndx_current_region_id == NDX_REGION_ROOT)
@@ -437,7 +396,7 @@ mod_key(char *buf, size_t buf_len, const char *path, uint64_t region_id)
 /* We need a key length that includes the embedded NUL — use fixed 17 suffix */
 #define MOD_KEY_SUFFIX_LEN 17  /* NUL + 16 hex digits */
 
-size_t
+static size_t
 mod_key_len(const char *path)
 {
 	return strlen(path) + MOD_KEY_SUFFIX_LEN;
@@ -496,6 +455,12 @@ module_load_path(const char *fname)
 #endif
 }
 
+static void module_rekey_region_index(ndx_mod_entry_t *me, uint64_t parent_id,
+                                      uint64_t child_id);
+static void module_rekey_loaded_entry(ndx_mod_entry_t *me, const char *old_key,
+                                      const char *load_path, uint64_t parent_id,
+                                      uint64_t child_id);
+
 void
 module_lookup_result_free(ndx_lookup_result_t *lookup)
 {
@@ -544,7 +509,7 @@ module_rekey_for_claim(const char *caller, uint64_t parent_id,
 	module_lookup_result_free(&lookup);
 }
 
-void
+static void
 module_rekey_region_index(ndx_mod_entry_t *me, uint64_t parent_id,
                           uint64_t child_id)
 {
@@ -568,7 +533,7 @@ module_rekey_region_index(ndx_mod_entry_t *me, uint64_t parent_id,
 #undef MOD_BY_REGION_MAX
 }
 
-void
+static void
 module_rekey_loaded_entry(ndx_mod_entry_t *me, const char *old_key,
                           const char *load_path, uint64_t parent_id,
                           uint64_t child_id)
@@ -592,7 +557,7 @@ module_rekey_loaded_entry(ndx_mod_entry_t *me, const char *old_key,
 		me->indx->region_id = child_id;
 }
 
-void *
+static void *
 module_base_from_symbol(void *sym)
 {
 #ifdef _WIN32
@@ -612,7 +577,7 @@ module_base_from_symbol(void *sym)
 #endif
 }
 
-void *
+static void *
 module_handle_base(void *handle)
 {
 #ifdef _WIN32
@@ -736,7 +701,7 @@ module_clear_fn_cache_for_handle(ndx_mod_entry_t *entry)
 	}
 }
 
-void
+static void
 module_cleanup_region_state(ndx_mod_entry_t *entry)
 {
 	if (!entry || !entry->region_state)
@@ -1106,7 +1071,7 @@ _ndx_claim_for_load(const char *caller, uint64_t parent_id,
 	child->owner_path = caller;
 	child->dispatch_gen = 1;
 	child->parent     = parent;
-	region_store(child);
+	qmap_put(region_hd, &child->id, &child);
 
 	/* Wire child into parent's children list */
 	child->sibling_next   = (ndx_region_entry_t *)parent->children_head;

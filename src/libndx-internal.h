@@ -99,19 +99,11 @@ void *module_lookup_symbol_raw(void *handle, const char *symbol);
 int module_lookup_symbol_fn(void *handle, const char *symbol, void *fn_out, size_t fn_size);
 void ndx_zero_ret(void *retp, const ndx_adapter_t *reg);
 void ndx_set_last_ret(const void *retp, size_t ret_size);
-int module_denied_by_ancestors(ndx_mod_entry_t *me,
-                               ndx_region_entry_t **anc_chain, int anc_n);
-int dispatch_fast_module(ndx_mod_entry_t *me,
-                         void *cb,
-                         ndx_adapter_t *reg,
-                         void (*dispatch_call)(void *, void *, void *),
-                         void *retp, void *arg, uint64_t region_id);
 int module_ensure_hook_impl_words(ndx_mod_entry_t *me, int hook_id);
 void module_mark_hook_implemented(ndx_mod_entry_t *me, int hook_id);
 int module_has_hook_implemented(const ndx_mod_entry_t *me, int hook_id);
 int module_ensure_fn_cache_cap(ndx_mod_entry_t *me, int needed);
 ndx_region_entry_t *region_lookup(uint64_t id);
-void region_store(ndx_region_entry_t *entry);
 const char *module_path_intern(char *path);
 void path_intern_free_all(void);
 int region_ancestor_chain(ndx_region_entry_t *start,
@@ -123,7 +115,6 @@ void region_mark_subtree_dirty(ndx_region_entry_t *entry);
 int region_rebuild_subtree_mods(ndx_region_entry_t *root);
 void region_ensure_root(void);
 void mod_key(char *buf, size_t buf_len, const char *path, uint64_t region_id);
-size_t mod_key_len(const char *path);
 size_t mod_key_measure(const void *data);
 
 typedef struct {
@@ -136,12 +127,6 @@ typedef struct {
 void module_lookup_result_free(ndx_lookup_result_t *lookup);
 ndx_lookup_result_t module_lookup_from_fname(const char *fname, uint64_t region_id);
 void module_rekey_for_claim(const char *caller, uint64_t parent_id, uint64_t child_id);
-void module_rekey_region_index(ndx_mod_entry_t *me, uint64_t parent_id, uint64_t child_id);
-void module_rekey_loaded_entry(ndx_mod_entry_t *me, const char *old_key,
-                               const char *load_path, uint64_t parent_id,
-                               uint64_t child_id);
-void *module_base_from_symbol(void *sym);
-void *module_handle_base(void *handle);
 void module_remove_denies(ndx_region_entry_t *re, const char *path);
 int module_is_denied(ndx_region_entry_t *re, const char *path);
 void module_region_detach(ndx_mod_entry_t *entry);
@@ -149,7 +134,6 @@ void module_region_insert_after(ndx_region_entry_t *re, ndx_mod_entry_t *entry,
                                 ndx_mod_entry_t *after);
 void module_region_append(ndx_region_entry_t *re, ndx_mod_entry_t *entry);
 void module_clear_fn_cache_for_handle(ndx_mod_entry_t *entry);
-void module_cleanup_region_state(ndx_mod_entry_t *entry);
 void module_free_entry(ndx_mod_entry_t *entry, int close_handle);
 
 typedef struct {
@@ -186,9 +170,6 @@ int _ndx_claim_for_load(const char *caller, uint64_t parent_id,
                         uint8_t bits, void *sl);
 void _ndx_init(void *ptr, const char *fname, uint64_t region_id);
 int fn_cache_prewarm(ndx_mod_entry_t *me);
-int ndx_dispatch_module(ndx_mod_entry_t *me, void *cb, ndx_adapter_t *adapter,
-                        void (*call_fn)(void *, void *, void *),
-                        void *retp, void *arg, uint64_t current_region_id);
 int ndx_runtime_ensure(void);
 
 #endif
