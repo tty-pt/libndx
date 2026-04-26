@@ -1,137 +1,55 @@
-#define _GNU_SOURCE
-#include "../include/ttypt/ndx.h"
-
-#ifdef _WIN32
-  #include <windows.h>
-  #define dlopen(filename, flags) (void*)LoadLibraryA(filename)
-  #define dlsym(handle, symbol) GetProcAddress((HMODULE)handle, symbol)
-  #define dlclose(handle) FreeLibrary((HMODULE)handle)
-  #define dlerror() _win_dlerror()
-
-  static DWORD ndx_err_tls;
-
-  static char err_buf[256];
-  static const char* _win_dlerror(void) {
-	  DWORD err_code = GetLastError();
-	  if (err_code == 0) {
-		  return NULL;
-	  }
-	  memset(err_buf, 0, sizeof(err_buf));
-	  FormatMessageA(
-		  FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-		  NULL, err_code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-		  err_buf, sizeof(err_buf), NULL);
-	  return err_buf;
-  }
-
-  #define NDX_SET_ERR(e) TlsSetValue(ndx_err_tls, (LPVOID)(intptr_t)(e))
-  #define NDX_GET_ERR() ((int)(intptr_t)TlsGetValue(ndx_err_tls))
-#else
-#include <dlfcn.h>
-  static int ndx_err_val;
-
-  #define NDX_SET_ERR(e) (ndx_err_val = (e))
-  #define NDX_GET_ERR() (ndx_err_val)
-#endif
-
-#include <stdlib.h>
-#include <string.h>
-#include <stdio.h>
-#include <stdint.h>
-
-#include <ttypt/qsys.h>
-#include <ttypt/qmap.h>
-
-#include "papi.h"
-
-#define MOD_MASK    0x7FFF
-#define SICA_MASK   0x7FFF
-#define REGION_MASK 0x7FFF
-
-/* Branch-prediction hints — kernel-style */
-#ifndef likely
-#  define likely(x)   __builtin_expect(!!(x), 1)
-#  define unlikely(x) __builtin_expect(!!(x), 0)
-#endif
+#include "libndx-internal.h"
 
 enum opts {
 	OPT_DETACH = 1,
 };
 
-/* Global qmap handles */
-unsigned mod_hd,            /* module key -> ndx_mod_entry_t* */
-         mod_by_region_hd,  /* region_id (uint64_t) -> ndx_mod_entry_t* (MULTIVALUE) */
-         sica_hd,           /* hook name  -> ndx_adapter_t*   */
-         path_intern_hd,    /* canonical module path -> interned path pointer */
-         region_hd;         /* region key -> ndx_region_entry_t* */
-
-/* hook name -> int hook_id (monotonically assigned at ndx_areg time) */
-static unsigned hook_id_hd;
-static int      ndx_hook_id_counter;
-
-/* ndx_adapter_by_id[hook_id] = adapter pointer — O(1) adapter lookup by id */
-static ndx_adapter_t **ndx_adapter_by_id;
-static int             ndx_adapter_by_id_cap;
-
-/* Sentinel: dlsym was called and returned NULL (hook not implemented in module) */
-#define NDX_FN_NOT_FOUND ((void *)(uintptr_t)1)
-
-static uint32_t ndx_ptr_type;
-static uint32_t ndx_mod_entry_type;
-static uint32_t ndx_region_entry_type;
-static uint32_t region_id_type;  /* fixed 8-byte key type for uint64_t region IDs */
-static uint32_t ndx_int_type;    /* fixed sizeof(int) value type for hook IDs */
-
-typedef ndx_t* (*get_ndx_func_t)(void);
-
 ndx_t ndx;
-static volatile int ndx_inited;
-static void __attribute__((cold)) ndx_init_once(void);
-static int _mod_unload(char *fname, uint64_t region_id);
-static int _mod_run(void *sl, const char *symbol);
-static int _ndx_claim_for_load(const char *caller, uint64_t parent_id,
-                               uint8_t bits, void *sl);
-static void _ndx_init(void *ptr, const char *fname, uint64_t region_id);
-static int fn_cache_prewarm(ndx_mod_entry_t *me);
-static int module_is_denied(ndx_region_entry_t *re, const char *path);
-static inline int ndx_dispatch_module(ndx_mod_entry_t *me,
-                                      int hook_id,
-                                      const char *name,
-                                      ndx_adapter_t *adapter,
-                                      void (*call_fn)(void *, void *, void *),
-                                      void *retp,
-                                      void *arg,
-                                      int commit_ret,
-                                      uint64_t current_region_id);
-static void module_rekey_region_index(ndx_mod_entry_t *me, uint64_t parent_id,
-                                      uint64_t child_id);
-static void module_rekey_loaded_entry(ndx_mod_entry_t *me, const char *old_key,
-                                      const char *load_path, uint64_t parent_id,
-                                      uint64_t child_id);
+ndx_runtime_t ndx_rt = {
+	.mod_key_type_id = QM_MISS,
+};
 
-/* Running count of successfully loaded modules (for alloca sizing in ndx_call) */
-static int ndx_mod_count;
+#ifdef _WIN32
+DWORD ndx_err_tls = TLS_OUT_OF_INDEXES;
+
+static char err_buf[256];
+const char *
+_win_dlerror(void)
+{
+	DWORD err_code = GetLastError();
+	if (err_code == 0)
+		return NULL;
+	memset(err_buf, 0, sizeof(err_buf));
+	FormatMessageA(
+		FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+		NULL, err_code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+		err_buf, sizeof(err_buf), NULL);
+	return err_buf;
+}
+#else
+int ndx_err_val;
+#endif
 
 /* T1.5: Per-call mutable state extracted from ndx_last_adapter to
  * avoid the 88-byte memcpy on fast path. ndx_last() reads these instead
  * of the full struct. */
-static __thread unsigned ndx_last_ran;
-static __thread char     ndx_last_retbuf[NDX_MAX_RET_SIZE];
-static __thread void    *ndx_last_retp;
+__thread unsigned ndx_last_ran;
+__thread char     ndx_last_retbuf[NDX_MAX_RET_SIZE];
+__thread void    *ndx_last_retp;
 
 /* Thread-local current region — id and a direct pointer kept in sync.
- * ndx_current_region_entry may be NULL before the first ndx_init_once() call;
+ * ndx_current_region_entry may be NULL before the first runtime init;
  * code that needs the entry must guard or call region_ensure_root() first. */
-static __thread uint64_t           ndx_current_region_id = NDX_REGION_ROOT;
-static __thread ndx_region_entry_t *ndx_current_region_entry = NULL;
+__thread uint64_t           ndx_current_region_id = NDX_REGION_ROOT;
+__thread ndx_region_entry_t *ndx_current_region_entry = NULL;
 
 /* Thread-local pointer to the currently-loading module entry.
  * Set during ndx_install() so child ndx_load() calls can register their
  * parent_entry for cascade-unload tracking. */
-static __thread ndx_mod_entry_t *ndx_loading_mod = NULL;
+__thread ndx_mod_entry_t *ndx_loading_mod = NULL;
 
 /* Keep the id/pointer pair in sync atomically (within a thread). */
-static inline void
+void
 set_current_region(uint64_t id, ndx_region_entry_t *entry)
 {
 	ndx_current_region_id = id;
@@ -148,32 +66,17 @@ set_current_region(uint64_t id, ndx_region_entry_t *entry)
  * NDX_REGION_ROOT = 0: plen=0 in its entry, matches everything.
  * ------------------------------------------------------------------------- */
 
-/*
- * Is anc an ancestor-or-equal of child_id?
- * O(1): mask child_id to anc->plen significant bits and compare to anc->id.
- */
-static int
-region_is_ancestor(const ndx_region_entry_t *anc, uint64_t child_id)
-{
-	if (anc->plen == 0)
-		return 1; /* root matches everything */
-	if (anc->plen == 64)
-		return anc->id == child_id; /* exact match only */
-	uint64_t mask = ~(((uint64_t)1 << (64 - anc->plen)) - 1);
-	return (child_id & mask) == anc->id;
-}
-
 /* -------------------------------------------------------------------------
  * Helpers
  * ------------------------------------------------------------------------- */
 
-static inline void *
+void *
 qmap_ptr(const void *value)
 {
 	return value ? *(void * const *) value : NULL;
 }
 
-static inline void *
+void *
 module_lookup_symbol_raw(void *handle, const char *symbol)
 {
 #ifdef _WIN32
@@ -186,7 +89,7 @@ module_lookup_symbol_raw(void *handle, const char *symbol)
 #endif
 }
 
-static inline int
+int
 module_lookup_symbol_fn(void *handle, const char *symbol, void *fn_out, size_t fn_size)
 {
 	void *sym = module_lookup_symbol_raw(handle, symbol);
@@ -196,14 +99,14 @@ module_lookup_symbol_fn(void *handle, const char *symbol, void *fn_out, size_t f
 	return 1;
 }
 
-static inline void
+void
 ndx_zero_ret(void *retp, const ndx_adapter_t *reg)
 {
 	if (retp && reg)
 		memset(retp, 0, reg->ret_size);
 }
 
-static inline void
+void
 ndx_set_last_ret(const void *retp, size_t ret_size)
 {
 	if (retp && ret_size > 0) {
@@ -214,7 +117,7 @@ ndx_set_last_ret(const void *retp, size_t ret_size)
 	}
 }
 
-static inline int
+int
 module_denied_by_ancestors(ndx_mod_entry_t *me,
                            ndx_region_entry_t **anc_chain, int anc_n)
 {
@@ -227,33 +130,68 @@ module_denied_by_ancestors(ndx_mod_entry_t *me,
 	return 0;
 }
 
-static inline int __attribute__((always_inline, hot))
+int __attribute__((hot))
 dispatch_fast_module(ndx_mod_entry_t *me,
+                     void *cb,
                      ndx_adapter_t *reg,
                      void (*dispatch_call)(void *, void *, void *),
-                     void *retp, void *arg, uint64_t region_id,
-                     ndx_region_entry_t **anc_chain, int anc_n,
-                     int check_denies)
+                     void *retp, void *arg, uint64_t region_id)
 {
 	if (!me || !me->indx)
 		return 0;
-	if (unlikely(check_denies) && module_denied_by_ancestors(me, anc_chain, anc_n))
-		return 0;
 
 	int rc = ndx_dispatch_module(me,
-	                             reg->hook_id,
-	                             reg->name,
+	                             cb,
 	                             reg,
 	                             dispatch_call,
 	                             retp, arg,
-	                             /*commit_ret=*/0,
 	                             region_id);
 	if (unlikely(rc == NDX_ERR_INVALID))
 		return NDX_ERR_INVALID;
 	return rc == 0;
 }
 
-static int
+int
+module_ensure_hook_impl_words(ndx_mod_entry_t *me, int hook_id)
+{
+	if (!me || hook_id < 0)
+		return -1;
+	int needed_words = (hook_id / 64) + 1;
+	if (needed_words <= me->hook_impl_words)
+		return 0;
+	uint64_t *tmp = realloc(me->hook_impl_bits,
+	                        (size_t)needed_words * sizeof(*tmp));
+	if (unlikely(!tmp))
+		return -1;
+	for (int i = me->hook_impl_words; i < needed_words; i++)
+		tmp[i] = 0;
+	me->hook_impl_bits = tmp;
+	me->hook_impl_words = needed_words;
+	return 0;
+}
+
+void
+module_mark_hook_implemented(ndx_mod_entry_t *me, int hook_id)
+{
+	if (!me || hook_id < 0)
+		return;
+	if (module_ensure_hook_impl_words(me, hook_id) < 0)
+		return;
+	me->hook_impl_bits[hook_id / 64] |= (uint64_t)1 << (hook_id % 64);
+}
+
+int
+module_has_hook_implemented(const ndx_mod_entry_t *me, int hook_id)
+{
+	if (!me || hook_id < 0)
+		return 0;
+	int word = hook_id / 64;
+	if (word >= me->hook_impl_words)
+		return 0;
+	return (me->hook_impl_bits[word] & ((uint64_t)1 << (hook_id % 64))) != 0;
+}
+
+int
 module_ensure_fn_cache_cap(ndx_mod_entry_t *me, int needed)
 {
 	if (!me || needed <= me->fn_cache_cap)
@@ -269,20 +207,20 @@ module_ensure_fn_cache_cap(ndx_mod_entry_t *me, int needed)
 }
 
 /* Look up an ndx_region_entry_t by id.  Returns NULL if not found. */
-static ndx_region_entry_t *
+ndx_region_entry_t *
 region_lookup(uint64_t id)
 {
 	return (ndx_region_entry_t *)qmap_ptr(qmap_get(region_hd, &id));
 }
 
 /* Store an ndx_region_entry_t keyed by its id. */
-static void
+void
 region_store(ndx_region_entry_t *entry)
 {
 	qmap_put(region_hd, &entry->id, &entry);
 }
 
-static const char *
+const char *
 module_path_intern(char *path)
 {
 	if (!path)
@@ -303,7 +241,7 @@ module_path_intern(char *path)
 	return path;
 }
 
-static void
+void
 path_intern_free_all(void)
 {
 	if (!path_intern_hd)
@@ -324,7 +262,7 @@ path_intern_free_all(void)
  * start must be non-NULL; the hash lookup is the caller's responsibility.
  * Returns number of entries filled.
  */
-static int
+int
 region_ancestor_chain(ndx_region_entry_t *start,
                       ndx_region_entry_t **chain, int chain_cap)
 {
@@ -344,7 +282,7 @@ region_ancestor_chain(ndx_region_entry_t *start,
 }
 
 /* Propagate a subtree flag upward from entry to root. */
-static inline void
+void
 region_propagate_deny(ndx_region_entry_t *entry)
 {
 	for (ndx_region_entry_t *e = entry; e; e = e->parent)
@@ -372,68 +310,97 @@ deny_list_free_owned(ndx_deny_entry_t *head)
 	}
 }
 
-static void
+void
 region_entry_free(ndx_region_entry_t *e)
 {
 	if (!e) return;
 	deny_list_free_owned(e->denied_hooks);
 	deny_list_free(e->denied_modules);
+	if (e->denied_hooks_set)
+		qmap_close(e->denied_hooks_set);
+	if (e->denied_modules_set)
+		qmap_close(e->denied_modules_set);
+	for (int i = 0; i < e->hook_dispatch_cap; i++)
+		free(e->hook_dispatch[i].slots);
+	free(e->hook_dispatch);
 	free(e->subtree_mods);
 	free(e);
 }
 
+void
+region_dispatch_gen_bump(ndx_region_entry_t *entry)
+{
+	for (ndx_region_entry_t *e = entry; e; e = e->parent) {
+		e->dispatch_gen++;
+		if (unlikely(e->dispatch_gen == 0))
+			e->dispatch_gen = 1;
+	}
+}
+
 /* T1.2: mark the subtree module cache dirty along the ancestor chain from
  * `entry` (inclusive) up to the root. Called whenever a module is added or
- * removed from any region, or when a new child region is claimed. O(depth). */
-static inline void
+ * removed from any region, or when a new child region is claimed. Also bumps
+ * the per-region dispatch generation along the ancestor path. O(depth). */
+void
 region_mark_subtree_dirty(ndx_region_entry_t *entry)
 {
+	region_dispatch_gen_bump(entry);
 	for (ndx_region_entry_t *e = entry; e; e = e->parent)
 		e->subtree_mods_dirty = 1;
 }
 
-/* Rebuild region->subtree_mods[] in DFS order (region's own modules first,
- * then each child's subtree recursively). Grows the backing array via tmp
- * pointer for OOM safety. Returns 0 on success, -1 on allocation failure. */
 static int
+region_subtree_mods_push(ndx_region_entry_t *root, ndx_mod_entry_t *me)
+{
+	if (root->subtree_mods_count >= root->subtree_mods_cap) {
+		int new_cap = root->subtree_mods_cap ? root->subtree_mods_cap * 2 : 8;
+		ndx_mod_entry_t **tmp = realloc(root->subtree_mods,
+		                                (size_t)new_cap * sizeof(*tmp));
+		if (unlikely(!tmp))
+			return -1;
+		root->subtree_mods = tmp;
+		root->subtree_mods_cap = new_cap;
+	}
+
+	root->subtree_mods[root->subtree_mods_count++] = me;
+	return 0;
+}
+
+static int
+region_collect_subtree_mods(ndx_region_entry_t *root, ndx_region_entry_t *node)
+{
+	for (ndx_mod_entry_t *me = node->mods_head; me; me = me->region_next) {
+		if (region_subtree_mods_push(root, me) < 0)
+			return -1;
+	}
+
+	for (ndx_region_entry_t *child = node->children_head;
+	     child; child = child->sibling_next) {
+		if (region_collect_subtree_mods(root, child) < 0)
+			return -1;
+	}
+
+	return 0;
+}
+
+/* Rebuild region->subtree_mods[] in DFS order (region's own modules first,
+ * then each child's subtree recursively). Returns 0 on success, -1 on
+ * allocation failure. */
+int
 region_rebuild_subtree_mods(ndx_region_entry_t *root)
 {
-	if (!root) return 0;
+	if (!root)
+		return 0;
 	root->subtree_mods_count = 0;
-
-	/* DFS with an explicit stack — same 65-slot bound as before. */
-	ndx_region_entry_t *stk[65];
-	int stk_top = 0;
-	stk[stk_top++] = root;
-
-	while (stk_top > 0) {
-		ndx_region_entry_t *rn = stk[--stk_top];
-
-		for (ndx_mod_entry_t *me = (ndx_mod_entry_t *)rn->mods_head;
-		     me; me = me->region_next) {
-			if (root->subtree_mods_count >= root->subtree_mods_cap) {
-				int new_cap = root->subtree_mods_cap
-					? root->subtree_mods_cap * 2 : 8;
-				ndx_mod_entry_t **tmp = realloc(root->subtree_mods,
-					new_cap * sizeof(*tmp));
-				if (unlikely(!tmp)) return -1;
-				root->subtree_mods = tmp;
-				root->subtree_mods_cap = new_cap;
-			}
-			root->subtree_mods[root->subtree_mods_count++] = me;
-		}
-
-		for (ndx_region_entry_t *ch = rn->children_head;
-		     ch && stk_top < 65; ch = ch->sibling_next)
-			stk[stk_top++] = ch;
-	}
+	if (region_collect_subtree_mods(root, root) < 0)
+		return -1;
 
 	root->subtree_mods_dirty = 0;
 	return 0;
 }
 
 /* Ensure the root region entry exists */
-static void
+void
 region_ensure_root(void)
 {
 	ndx_region_entry_t *root = region_lookup(NDX_REGION_ROOT);
@@ -444,6 +411,7 @@ region_ensure_root(void)
 		root->child_bits = 0;
 		root->plen       = 0;
 		root->owner_path = NULL; /* host owns root */
+		root->dispatch_gen = 1;
 		root->parent     = NULL; /* root has no parent */
 		region_store(root);
 	}
@@ -459,7 +427,7 @@ region_ensure_root(void)
  * regions (each gets its own ndx_mod_entry_t).
  * ------------------------------------------------------------------------- */
 
-static void
+void
 mod_key(char *buf, size_t buf_len, const char *path, uint64_t region_id)
 {
 	snprintf(buf, buf_len, "%s%c%016llx",
@@ -469,7 +437,7 @@ mod_key(char *buf, size_t buf_len, const char *path, uint64_t region_id)
 /* We need a key length that includes the embedded NUL — use fixed 17 suffix */
 #define MOD_KEY_SUFFIX_LEN 17  /* NUL + 16 hex digits */
 
-static size_t
+size_t
 mod_key_len(const char *path)
 {
 	return strlen(path) + MOD_KEY_SUFFIX_LEN;
@@ -528,53 +496,41 @@ module_load_path(const char *fname)
 #endif
 }
 
-/*
- * Build the canonical module key for a (fname, region_id) pair.
- * The caller owns the returned path buffer and must free it.
- */
-static char *
-module_key_from_fname(char *buf, size_t buf_len,
-                      const char *fname, uint64_t region_id)
-{
-	char *load_path = module_load_path(fname);
-	if (!load_path)
-		return NULL;
-	mod_key(buf, buf_len, load_path, region_id);
-	return load_path;
-}
-
-typedef struct {
-	ndx_mod_entry_t *entry;
-	char             key[512];
-	char            *load_path;
-	int              err;
-} ndx_lookup_result_t;
-
-static void
+void
 module_lookup_result_free(ndx_lookup_result_t *lookup)
 {
 	if (!lookup)
 		return;
+	free(lookup->key);
+	lookup->key = NULL;
 	free(lookup->load_path);
 	lookup->load_path = NULL;
 }
 
-static ndx_lookup_result_t
+ndx_lookup_result_t
 module_lookup_from_fname(const char *fname, uint64_t region_id)
 {
 	ndx_lookup_result_t out = {0};
-	out.load_path = module_key_from_fname(out.key, sizeof(out.key),
-	                                      fname, region_id);
+	out.load_path = module_load_path(fname);
 	if (!out.load_path) {
 		out.err = NDX_ERR_INVALID;
 		return out;
 	}
+	size_t key_len = mod_key_len(out.load_path);
+	out.key = malloc(key_len);
+	if (!out.key) {
+		free(out.load_path);
+		out.load_path = NULL;
+		out.err = NDX_ERR_INVALID;
+		return out;
+	}
+	mod_key(out.key, key_len, out.load_path, region_id);
 	out.entry = qmap_ptr(qmap_get(mod_hd, out.key));
 	out.err = NDX_OK;
 	return out;
 }
 
-static void
+void
 module_rekey_for_claim(const char *caller, uint64_t parent_id,
                        uint64_t child_id)
 {
@@ -588,7 +544,7 @@ module_rekey_for_claim(const char *caller, uint64_t parent_id,
 	module_lookup_result_free(&lookup);
 }
 
-static void
+void
 module_rekey_region_index(ndx_mod_entry_t *me, uint64_t parent_id,
                           uint64_t child_id)
 {
@@ -612,7 +568,7 @@ module_rekey_region_index(ndx_mod_entry_t *me, uint64_t parent_id,
 #undef MOD_BY_REGION_MAX
 }
 
-static void
+void
 module_rekey_loaded_entry(ndx_mod_entry_t *me, const char *old_key,
                           const char *load_path, uint64_t parent_id,
                           uint64_t child_id)
@@ -621,18 +577,22 @@ module_rekey_loaded_entry(ndx_mod_entry_t *me, const char *old_key,
 		return;
 	}
 
+	size_t new_key_len = mod_key_len(load_path);
+	char *new_key = malloc(new_key_len);
+	if (!new_key)
+		return;
+	mod_key(new_key, new_key_len, load_path, child_id);
 	me->region_id = child_id;
-	char new_key[256];
-	mod_key(new_key, sizeof(new_key), load_path, child_id);
 	qmap_put(mod_hd, new_key, &me);
 	qmap_del(mod_hd, old_key);
-	memcpy(me->mod_key, new_key, mod_key_len(load_path));
+	memcpy(me->mod_key, new_key, new_key_len);
+	free(new_key);
 	module_rekey_region_index(me, parent_id, child_id);
 	if (me->indx)
 		me->indx->region_id = child_id;
 }
 
-static void *
+void *
 module_base_from_symbol(void *sym)
 {
 #ifdef _WIN32
@@ -652,7 +612,7 @@ module_base_from_symbol(void *sym)
 #endif
 }
 
-static void *
+void *
 module_handle_base(void *handle)
 {
 #ifdef _WIN32
@@ -664,7 +624,7 @@ module_handle_base(void *handle)
 #endif
 }
 
-static void
+void
 module_remove_denies(ndx_region_entry_t *re, const char *path)
 {
 	if (!re || !path)
@@ -683,7 +643,7 @@ module_remove_denies(ndx_region_entry_t *re, const char *path)
 	}
 }
 
-static int
+int
 module_is_denied(ndx_region_entry_t *re, const char *path)
 {
 	if (!re || !path)
@@ -691,13 +651,13 @@ module_is_denied(ndx_region_entry_t *re, const char *path)
 	if (re->denied_modules_set && qmap_get(re->denied_modules_set, &path))
 		return 1;
 	for (ndx_deny_entry_t *d = re->denied_modules; d; d = d->next) {
-		if (d->value == path || strcmp(d->value, path) == 0)
+		if (d->value == path)
 			return 1;
 	}
 	return 0;
 }
 
-static void
+void
 module_region_detach(ndx_mod_entry_t *entry)
 {
 	ndx_region_entry_t *re = entry ? entry->region_entry : NULL;
@@ -719,7 +679,7 @@ module_region_detach(ndx_mod_entry_t *entry)
 	region_mark_subtree_dirty(re);
 }
 
-static void
+void
 module_region_insert_after(ndx_region_entry_t *re, ndx_mod_entry_t *entry,
                            ndx_mod_entry_t *after)
 {
@@ -747,13 +707,13 @@ module_region_insert_after(ndx_region_entry_t *re, ndx_mod_entry_t *entry,
 	region_mark_subtree_dirty(re);
 }
 
-static void
+void
 module_region_append(ndx_region_entry_t *re, ndx_mod_entry_t *entry)
 {
 	module_region_insert_after(re, entry, re ? re->mods_tail : NULL);
 }
 
-static void
+void
 module_clear_fn_cache_for_handle(ndx_mod_entry_t *entry)
 {
 	if (!entry || !entry->handle)
@@ -776,71 +736,81 @@ module_clear_fn_cache_for_handle(ndx_mod_entry_t *entry)
 	}
 }
 
-typedef struct {
-	ndx_lookup_result_t lookup;
-	void               *handle;
-	char               *stable_fname;
-	char               *stable_key;
-	const char         *interned_load_path;
-	ndx_mod_entry_t    *mod_entry;
-	ndx_region_entry_t *inherited_reg;
-	uint64_t            inherited_region_id;
-	uint64_t            prev_region_id;
-	ndx_region_entry_t *prev_region_entry;
-	unsigned            phases;
-} ndx_load_txn_t;
-
-enum {
-	NDX_LOAD_HAVE_LOOKUP       = 1u << 0,
-	NDX_LOAD_HAVE_HANDLE       = 1u << 1,
-	NDX_LOAD_HAVE_STABLE_FNAME = 1u << 2,
-	NDX_LOAD_HAVE_STABLE_KEY   = 1u << 3,
-	NDX_LOAD_HAVE_ENTRY        = 1u << 4,
-	NDX_LOAD_PUBLISHED_ENTRY   = 1u << 5,
-	NDX_LOAD_CONTEXT_ACTIVE    = 1u << 6,
-};
-
-static void
-mod_load_restore_context(ndx_load_txn_t *tx)
+void
+module_cleanup_region_state(ndx_mod_entry_t *entry)
 {
-	if (!tx || !(tx->phases & NDX_LOAD_CONTEXT_ACTIVE))
+	if (!entry || !entry->region_state)
 		return;
-	set_current_region(tx->prev_region_id, tx->prev_region_entry);
-	tx->phases &= ~NDX_LOAD_CONTEXT_ACTIVE;
+
+	typedef void ndx_region_cleanup_t(void *state);
+	ndx_region_cleanup_t *cleanup_fn = NULL;
+	module_lookup_symbol_fn(entry->handle, "ndx_region_cleanup",
+	                        &cleanup_fn, sizeof(cleanup_fn));
+	if (cleanup_fn)
+		cleanup_fn(entry->region_state);
+	free(entry->region_state);
+	entry->region_state = NULL;
 }
 
-static int
+void
+module_free_entry(ndx_mod_entry_t *entry, int close_handle)
+{
+	void *handle;
+
+	if (!entry)
+		return;
+
+	handle = entry->handle;
+	module_cleanup_region_state(entry);
+	free(entry->fn_cache);
+	free(entry->hook_impl_bits);
+	free(entry->mod_key);
+	free(entry);
+
+	if (close_handle && handle)
+		dlclose(handle);
+}
+
+void
+mod_load_restore_context(ndx_load_txn_t *tx)
+{
+	if (!tx || !tx->context_active)
+		return;
+	set_current_region(tx->prev_region_id, tx->prev_region_entry);
+	tx->context_active = 0;
+}
+
+int
 mod_load_abort(ndx_load_txn_t *tx, int err)
 {
 	if (!tx)
 		return err;
 
 	mod_load_restore_context(tx);
-	if ((tx->phases & NDX_LOAD_PUBLISHED_ENTRY) && tx->mod_entry) {
+	if (tx->published_entry && tx->mod_entry) {
 		qmap_del(mod_by_region_hd, &tx->mod_entry->region_id);
 		qmap_del(mod_hd, tx->mod_entry->mod_key);
 	}
-	if ((tx->phases & NDX_LOAD_HAVE_ENTRY) && tx->mod_entry) {
+	if (tx->mod_entry) {
 		free(tx->mod_entry->fn_cache);
+		free(tx->mod_entry->hook_impl_bits);
 		free(tx->mod_entry->mod_key);
 		free(tx->mod_entry);
-	} else if (tx->phases & NDX_LOAD_HAVE_STABLE_KEY) {
+	} else if (tx->stable_key) {
 		free(tx->stable_key);
 	}
-	if (tx->phases & NDX_LOAD_HAVE_STABLE_FNAME)
+	if (tx->stable_fname)
 		free(tx->stable_fname);
-	if (tx->phases & NDX_LOAD_HAVE_LOOKUP)
-		module_lookup_result_free(&tx->lookup);
-	if (tx->phases & NDX_LOAD_HAVE_HANDLE)
+	module_lookup_result_free(&tx->lookup);
+	if (tx->handle)
 		dlclose(tx->handle);
 	return err;
 }
 
-static int
+int
 mod_load_open_handle(ndx_load_txn_t *tx, char *fname)
 {
 	tx->lookup = module_lookup_from_fname(fname, tx->inherited_region_id);
-	tx->phases |= NDX_LOAD_HAVE_LOOKUP;
 	if (tx->lookup.err != NDX_OK)
 		return tx->lookup.err;
 	if (!tx->lookup.load_path)
@@ -850,15 +820,13 @@ mod_load_open_handle(ndx_load_txn_t *tx, char *fname)
 	if (!tx->handle) {
 		WARN("_mod_load failed loading '%s': %s\n", fname, dlerror());
 		module_lookup_result_free(&tx->lookup);
-		tx->phases &= ~NDX_LOAD_HAVE_LOOKUP;
 		return NDX_ERR_NOTFOUND;
 	}
-	tx->phases |= NDX_LOAD_HAVE_HANDLE;
 
 	return NDX_OK;
 }
 
-static int
+int
 mod_load_try_reuse_existing(ndx_load_txn_t *tx)
 {
 	ndx_mod_entry_t *existing = tx->lookup.entry;
@@ -868,26 +836,20 @@ mod_load_try_reuse_existing(ndx_load_txn_t *tx)
 	existing->refcount++;
 	dlclose(tx->handle);
 	tx->handle = NULL;
-	tx->phases &= ~NDX_LOAD_HAVE_HANDLE;
 	module_lookup_result_free(&tx->lookup);
-	tx->phases &= ~NDX_LOAD_HAVE_LOOKUP;
 	return 1;
 }
 
-static int
+int
 mod_load_alloc_entry(ndx_load_txn_t *tx, char *fname)
 {
-	char *load_path = tx->lookup.load_path;
-	size_t klen = mod_key_len(load_path);
-
 	tx->stable_fname = strdup(fname);
-	tx->stable_key = malloc(klen);
-	if (!tx->stable_fname || !tx->stable_key)
+	if (!tx->stable_fname || !tx->lookup.key)
 		return NDX_ERR_INVALID;
-	tx->phases |= NDX_LOAD_HAVE_STABLE_FNAME | NDX_LOAD_HAVE_STABLE_KEY;
+	tx->stable_key = tx->lookup.key;
+	tx->lookup.key = NULL;
 
-	memcpy(tx->stable_key, tx->lookup.key, klen);
-	tx->interned_load_path = module_path_intern(load_path);
+	tx->interned_load_path = module_path_intern(tx->lookup.load_path);
 	tx->lookup.load_path = NULL;
 	if (!tx->interned_load_path)
 		return NDX_ERR_INVALID;
@@ -902,21 +864,20 @@ mod_load_alloc_entry(ndx_load_txn_t *tx, char *fname)
 	tx->mod_entry->parent_entry = ndx_loading_mod;
 	tx->mod_entry->mod_key      = tx->stable_key;
 	tx->mod_entry->load_path    = tx->interned_load_path;
-	tx->phases |= NDX_LOAD_HAVE_ENTRY;
 
 	return NDX_OK;
 }
 
-static int
+int
 mod_load_publish_entry(ndx_load_txn_t *tx)
 {
 	qmap_put(mod_hd, tx->stable_key, &tx->mod_entry);
 	qmap_put(mod_by_region_hd, &tx->mod_entry->region_id, &tx->mod_entry);
-	tx->phases |= NDX_LOAD_PUBLISHED_ENTRY;
+	tx->published_entry = 1;
 	return NDX_OK;
 }
 
-static int
+int
 mod_load_bind_ndx(ndx_load_txn_t *tx)
 {
 	get_ndx_func_t get_ndx = NULL;
@@ -931,18 +892,18 @@ mod_load_bind_ndx(ndx_load_txn_t *tx)
 	return NDX_OK;
 }
 
-static int
+int
 mod_load_enter_context(ndx_load_txn_t *tx)
 {
 	tx->inherited_reg = region_lookup(tx->inherited_region_id);
 	tx->prev_region_id = ndx_current_region_id;
 	tx->prev_region_entry = ndx_current_region_entry;
 	set_current_region(tx->inherited_region_id, tx->inherited_reg);
-	tx->phases |= NDX_LOAD_CONTEXT_ACTIVE;
+	tx->context_active = 1;
 	return NDX_OK;
 }
 
-static int
+int
 mod_load_claim_if_needed(ndx_load_txn_t *tx)
 {
 	uint8_t *claim_sym = module_lookup_symbol_raw(tx->handle, "ndx_claim");
@@ -958,7 +919,7 @@ mod_load_claim_if_needed(ndx_load_txn_t *tx)
 	                           *claim_sym, tx->handle);
 }
 
-static int
+int
 mod_load_run_install(ndx_load_txn_t *tx)
 {
 	ndx_mod_entry_t *prev_loading_mod = ndx_loading_mod;
@@ -970,7 +931,7 @@ mod_load_run_install(ndx_load_txn_t *tx)
 	return ret;
 }
 
-static void
+void
 module_remove_path_owned_entries(ndx_region_entry_t *re, const char *path,
                                  void *handle UNUSED)
 {
@@ -991,13 +952,11 @@ module_remove_path_owned_entries(ndx_region_entry_t *re, const char *path,
  * qmap then hashes/compares via memcmp over the full blob, correctly
  * distinguishing (path, region_A) from (path, region_B).
  */
-static size_t
+size_t
 mod_key_measure(const void *data)
 {
 	return strlen((const char *)data) + MOD_KEY_SUFFIX_LEN;
 }
-
-static uint32_t mod_key_type = QM_MISS;
 
 /* -------------------------------------------------------------------------
  * Public API: error
@@ -1024,7 +983,11 @@ const char *ndx_strerror(int err) {
  * ------------------------------------------------------------------------- */
 
 int ndx_require_claim(ndx_claim_handler_fn_t *fn, void *ud) {
-	ndx_init_once();
+	int enter_ret = ndx_runtime_ensure();
+	if (enter_ret != NDX_OK) {
+		NDX_SET_ERR(enter_ret);
+		return enter_ret;
+	}
 	ndx_region_entry_t *reg = region_lookup(ndx_current_region_id);
 	if (!reg) {
 		NDX_SET_ERR(NDX_ERR_NOTFOUND);
@@ -1038,8 +1001,8 @@ int ndx_require_claim(ndx_claim_handler_fn_t *fn, void *ud) {
 	} else {
 		reg->claim_handler    = fn;
 		reg->claim_handler_ud = ud;
-		reg->require_claim    = 1;
-	}
+			reg->require_claim    = 1;
+		}
 	NDX_SET_ERR(NDX_OK);
 	return NDX_OK;
 }
@@ -1092,7 +1055,7 @@ region_alloc_slot(const ndx_region_entry_t *parent, uint8_t bits)
  * bits       — value read from the module's ndx_claim symbol
  * handle     — dlopen handle so we can update the live ndx_t
  * ------------------------------------------------------------------------- */
-static int
+int
 _ndx_claim_for_load(const char *caller, uint64_t parent_id,
                     uint8_t bits, void *handle)
 {
@@ -1141,6 +1104,7 @@ _ndx_claim_for_load(const char *caller, uint64_t parent_id,
 	child->depth      = parent->depth + 1;
 	child->child_bits = granted;
 	child->owner_path = caller;
+	child->dispatch_gen = 1;
 	child->parent     = parent;
 	region_store(child);
 
@@ -1166,7 +1130,11 @@ _ndx_claim_for_load(const char *caller, uint64_t parent_id,
  * ------------------------------------------------------------------------- */
 
 int ndx_deny(const char *what, ndx_deny_type_t type) {
-	ndx_init_once();
+	int enter_ret = ndx_runtime_ensure();
+	if (enter_ret != NDX_OK) {
+		NDX_SET_ERR(enter_ret);
+		return enter_ret;
+	}
 	ndx_region_entry_t *reg = region_lookup(ndx_current_region_id);
 	if (!reg) {
 		NDX_SET_ERR(NDX_ERR_NOTFOUND);
@@ -1187,18 +1155,18 @@ int ndx_deny(const char *what, ndx_deny_type_t type) {
 			qmap_put(reg->denied_hooks_set, node->value, &sentinel);
 		}
 	} else {
-		char *path = module_load_path(what);
-		if (!path) {
-			free(node);
-			NDX_SET_ERR(NDX_ERR_INVALID);
-			return NDX_ERR_INVALID;
-		}
-		const char *interned = module_path_intern(path);
-		if (!interned) {
-			free(node);
-			NDX_SET_ERR(NDX_ERR_INVALID);
-			return NDX_ERR_INVALID;
-		}
+			char *path = module_load_path(what);
+			if (!path) {
+				free(node);
+				NDX_SET_ERR(NDX_ERR_INVALID);
+				return NDX_ERR_INVALID;
+			}
+			const char *interned = module_path_intern(path);
+			if (!interned) {
+				free(node);
+				NDX_SET_ERR(NDX_ERR_INVALID);
+				return NDX_ERR_INVALID;
+			}
 		node->value = (char *)interned;
 		node->next = reg->denied_modules;
 		reg->denied_modules = node;
@@ -1211,6 +1179,7 @@ int ndx_deny(const char *what, ndx_deny_type_t type) {
 		}
 	}
 	region_propagate_deny(reg);
+	region_dispatch_gen_bump(reg);
 
 	NDX_SET_ERR(NDX_OK);
 	return NDX_OK;
@@ -1221,7 +1190,11 @@ int ndx_deny(const char *what, ndx_deny_type_t type) {
  * ------------------------------------------------------------------------- */
 
 int ndx_region_each(ndx_region_each_fn_t *fn, void *ud) {
-	ndx_init_once();
+	int enter_ret = ndx_runtime_ensure();
+	if (enter_ret != NDX_OK) {
+		NDX_SET_ERR(enter_ret);
+		return enter_ret;
+	}
 	uint64_t parent_id = ndx_current_region_id;
 	ndx_region_entry_t *parent = region_lookup(parent_id);
 	if (!parent) {
@@ -1229,15 +1202,8 @@ int ndx_region_each(ndx_region_each_fn_t *fn, void *ud) {
 		return NDX_ERR_NOTFOUND;
 	}
 
-	unsigned c = qmap_iter(region_hd, NULL, 0);
-	const void *key, *value;
 	int ret = NDX_OK;
-	while (qmap_next(&key, &value, c)) {
-		ndx_region_entry_t *e = qmap_ptr(value);
-		if (!e || e->id == parent_id) continue;
-		if (!region_is_ancestor(parent, e->id)) continue;
-		/* Immediate child: plen == parent->plen + child_bits */
-		if (e->plen != (uint8_t)(parent->plen + e->child_bits)) continue;
+	for (ndx_region_entry_t *e = parent->children_head; e; e = e->sibling_next) {
 		ret = fn(e->id, ud);
 		if (ret != NDX_OK) break;
 	}
@@ -1248,14 +1214,24 @@ int ndx_region_each(ndx_region_each_fn_t *fn, void *ud) {
 uint64_t
 ndx_current_region(void)
 {
-	ndx_init_once();
-	return ndx_current_region_id;
+	uint64_t region_id;
+	int enter_ret = ndx_runtime_ensure();
+	if (enter_ret != NDX_OK) {
+		NDX_SET_ERR(enter_ret);
+		return NDX_REGION_INVALID;
+	}
+	region_id = ndx_current_region_id;
+	return region_id;
 }
 
 int
 ndx_with_region(uint64_t region_id, ndx_scope_fn_t *fn, void *ud)
 {
-	ndx_init_once();
+	int enter_ret = ndx_runtime_ensure();
+	if (enter_ret != NDX_OK) {
+		NDX_SET_ERR(enter_ret);
+		return enter_ret;
+	}
 	if (!fn) {
 		NDX_SET_ERR(NDX_ERR_INVALID);
 		return NDX_ERR_INVALID;
@@ -1282,810 +1258,6 @@ ndx_with_region(uint64_t region_id, ndx_scope_fn_t *fn, void *ud)
  * Module loading
  * ------------------------------------------------------------------------- */
 
-int _mod_run(void *sl, const char *symbol) {
-	void (*cb)(void) = NULL;
-
-	module_lookup_symbol_fn(sl, symbol, &cb, sizeof(cb));
-
-	if (!cb) {
-		WARN("couldn't find %s\n", symbol);
-		return NDX_ERR_NOTFOUND;
-	}
-
-	((mod_cb_t) cb)();
-	return NDX_OK;
-}
-
-#ifdef _WIN32
-#define _RTLD_DEFAULT NULL
-#else
-#define _RTLD_DEFAULT RTLD_DEFAULT
-#endif
-
-void _ndx_init(void *ptr, const char *fname,
-               uint64_t region_id) {
-	ndx_t *indx = ptr;
-	indx->call             = ndx_call;
-	indx->areg             = ndx_areg;
-	indx->load             = ndx_load;
-	indx->last             = ndx_last;
-	indx->shutdown         = ndx_shutdown;
-	indx->module_path      = fname;
-	indx->region_id        = region_id;
-	indx->deny             = ndx_deny;
-	indx->require_claim    = ndx_require_claim;
-	indx->region_each      = ndx_region_each;
-	indx->with_region      = ndx_with_region;
-	indx->current_region   = ndx_current_region;
-	indx->unload           = ndx_unload;
-	indx->reload           = ndx_reload;
-}
-
-int _mod_load(char *fname) {
-	ndx_load_txn_t tx = {
-		.inherited_region_id = ndx_current_region_id,
-	};
-	int ret = NDX_OK;
-
-	ret = mod_load_open_handle(&tx, fname);
-	if (ret != NDX_OK) {
-		NDX_SET_ERR(ret);
-		return ret;
-	}
-	if (mod_load_try_reuse_existing(&tx))
-		return NDX_OK;
-
-	ret = mod_load_alloc_entry(&tx, fname);
-	if (ret != NDX_OK)
-		goto fail;
-
-	ret = mod_load_publish_entry(&tx);
-	if (ret != NDX_OK)
-		goto fail;
-
-	ret = mod_load_bind_ndx(&tx);
-	if (ret != NDX_OK)
-		goto fail;
-
-	ret = mod_load_enter_context(&tx);
-	if (ret != NDX_OK)
-		goto fail;
-
-	ret = mod_load_claim_if_needed(&tx);
-	if (ret != NDX_OK)
-		goto fail;
-
-	ret = mod_load_run_install(&tx);
-	if (ret != NDX_OK)
-		goto fail;
-
-	ndx_mod_count++;
-	{
-		typedef size_t ndx_region_state_size_t(void);
-		ndx_region_state_size_t *sz_fn = NULL;
-		module_lookup_symbol_fn(tx.handle, "ndx_region_state_size", &sz_fn, sizeof(sz_fn));
-		if (sz_fn) {
-			size_t sz = sz_fn();
-			if (sz > 0)
-				tx.mod_entry->region_state = calloc(1, sz);
-		}
-	}
-	{
-		ndx_region_entry_t *re = region_lookup(tx.mod_entry->region_id);
-		if (re)
-			module_region_append(re, tx.mod_entry);
-	}
-	(void)fn_cache_prewarm(tx.mod_entry);
-	mod_load_restore_context(&tx);
-	module_lookup_result_free(&tx.lookup);
-	tx.phases &= ~NDX_LOAD_HAVE_LOOKUP;
-	return NDX_OK;
-
-fail:
-	return mod_load_abort(&tx, ret);
-}
-
-int ndx_load(char *fname) {
-	ndx_init_once();
-	int ret = _mod_load(fname);
-	NDX_SET_ERR(ret);
-	return ret;
-}
-
-/* -------------------------------------------------------------------------
- * ndx_unload / ndx_reload
- * ------------------------------------------------------------------------- */
-
-/*
- * Internal unload: looks up (fname, region_id) and performs the full teardown.
- * Unload always succeeds — no veto.  Children loaded by this module are
- * cascade-unloaded; if a child has other loaders (refcount > 1) it simply
- * has its refcount decremented and stays active.
- */
-static int
-_mod_unload(char *fname, uint64_t region_id)
-{
-	ndx_lookup_result_t lookup = module_lookup_from_fname(fname, region_id);
-	if (lookup.err != NDX_OK) {
-		NDX_SET_ERR(lookup.err);
-		return lookup.err;
-	}
-	ndx_mod_entry_t *entry = lookup.entry;
-	if (!entry) {
-		module_lookup_result_free(&lookup);
-		NDX_SET_ERR(NDX_ERR_NOTFOUND);
-		return NDX_ERR_NOTFOUND;
-	}
-	module_lookup_result_free(&lookup);
-
-	/* Decrement refcount — only actually unload when it hits zero */
-	entry->refcount--;
-	if (entry->refcount > 0)
-		return NDX_OK;
-
-	/* Cascade-unload children that were loaded by this module.
-	 * _mod_unload on a child with refcount > 1 simply decrements its
-	 * refcount and leaves it active — so shared children are safe. */
-	{
-		unsigned c = qmap_iter(mod_hd, NULL, 0);
-		const void *key, *value;
-		/* Collect children first to avoid iterator invalidation */
-		ndx_mod_entry_t **children = NULL;
-		int nchildren = 0, children_cap = 0;
-		while (qmap_next(&key, &value, c)) {
-			ndx_mod_entry_t *m = qmap_ptr(value);
-			if (m && m != entry && m->parent_entry == entry) {
-				if (nchildren >= children_cap) {
-					children_cap = children_cap ? children_cap * 2 : 8;
-					children = realloc(children,
-					                   children_cap * sizeof(*children));
-				}
-				children[nchildren++] = m;
-			}
-		}
-		for (int i = 0; i < nchildren; i++) {
-			ndx_mod_entry_t *child = children[i];
-			/* _mod_unload still takes the original module name and appends
-			 * the platform suffix internally. */
-			const char *child_path = child && child->indx
-				? child->indx->module_path : NULL;
-			if (child_path)
-				_mod_unload((char *)child_path, child->region_id);
-		}
-		free(children);
-	}
-
-	module_clear_fn_cache_for_handle(entry);
-
-	if (entry->region_entry && entry->load_path)
-		module_remove_path_owned_entries(entry->region_entry,
-		                                 entry->load_path,
-		                                 entry->handle);
-
-	/* Remove from region's doubly-linked list (O(1)) */
-	module_region_detach(entry);
-
-	/* Remove from hash maps */
-	qmap_del(mod_by_region_hd, &entry->region_id);
-	qmap_del(mod_hd, entry->mod_key);
-
-	ndx_mod_count--;
-
-	/* Release resources */
-	void *handle = entry->handle;
-	/* Per-region state cleanup */
-	if (entry->region_state) {
-		typedef void ndx_region_cleanup_t(void *state);
-		ndx_region_cleanup_t *cleanup_fn = NULL;
-		module_lookup_symbol_fn(entry->handle, "ndx_region_cleanup",
-		                        &cleanup_fn, sizeof(cleanup_fn));
-		if (cleanup_fn)
-			cleanup_fn(entry->region_state);
-		free(entry->region_state);
-	}
-
-	free(entry->fn_cache);
-	free(entry->mod_key);
-	free(entry);
-
-	/* dlclose balances the dlopen refcount.  Because we load with RTLD_NODELETE
-	 * the library is NOT physically removed from the address space — that is by
-	 * design (adapter objects in .data sections stay valid for sica_hd).  The
-	 * logical module entry has been removed above; the .so stays mapped. */
-	dlclose(handle);
-	return NDX_OK;
-}
-
-int ndx_unload(char *fname) {
-	ndx_init_once();
-	uint64_t region_id = ndx_current_region_id;
-	int ret = _mod_unload(fname, region_id);
-	NDX_SET_ERR(ret);
-	return ret;
-}
-
-int ndx_reload(char *fname) {
-	ndx_init_once();
-	uint64_t region_id = ndx_current_region_id;
-
-	/* Find the existing entry to record its position */
-	ndx_lookup_result_t lookup = module_lookup_from_fname(fname, region_id);
-	if (lookup.err != NDX_OK) {
-		NDX_SET_ERR(lookup.err);
-		return lookup.err;
-	}
-	ndx_mod_entry_t *existing = lookup.entry;
-	if (!existing) {
-		module_lookup_result_free(&lookup);
-		NDX_SET_ERR(NDX_ERR_NOTFOUND);
-		return NDX_ERR_NOTFOUND;
-	}
-	module_lookup_result_free(&lookup);
-
-	/* Save position in dispatch list */
-	ndx_mod_entry_t *insert_after = existing->region_prev; /* may be NULL (was head) */
-	ndx_region_entry_t *re = existing->region_entry;
-
-	/* Unload — this removes the entry from the list */
-	int uret = _mod_unload(fname, region_id);
-	if (uret != NDX_OK) {
-		NDX_SET_ERR(uret);
-		return uret;
-	}
-
-	/* Load the module again */
-	int lret = _mod_load(fname);
-	if (lret != NDX_OK) {
-		NDX_SET_ERR(lret);
-		return lret;
-	}
-
-	/* Re-find the newly loaded entry */
-	lookup = module_lookup_from_fname(fname, region_id);
-	if (lookup.err != NDX_OK) {
-		NDX_SET_ERR(lookup.err);
-		return lookup.err;
-	}
-	ndx_mod_entry_t *new_entry = lookup.entry;
-	if (!new_entry || !re) {
-		module_lookup_result_free(&lookup);
-		NDX_SET_ERR(NDX_OK);
-		return NDX_OK;
-	}
-	module_lookup_result_free(&lookup);
-
-	module_region_detach(new_entry);
-	module_region_insert_after(re, new_entry, insert_after);
-
-	NDX_SET_ERR(NDX_OK);
-	return NDX_OK;
-}
-
-int ndx_last(void *ret) {
-	ndx_init_once();
-	if (!ndx.adapter) {
-		NDX_SET_ERR(NDX_ERR_INVALID);
-		return NDX_ERR_INVALID;
-	}
-	/* T1.5: ran stored in TLS; read ret bytes from TLS retp pointer */
-	if (!ndx_last_ran) {
-		NDX_SET_ERR(NDX_ERR_NOTFOUND);
-		return NDX_ERR_NOTFOUND;
-	}
-	if (ret && ndx_last_retp) {
-		memcpy(ret, ndx_last_retp, ndx.adapter->ret_size);
-	}
-	NDX_SET_ERR(NDX_OK);
-	return NDX_OK;
-}
-
-/* -------------------------------------------------------------------------
- * ndx_call — region-aware dispatch
- * ------------------------------------------------------------------------- */
-
-/*
- * fn_cache_resolve — lazy per-module, per-hook dlsym cache.
- *
- * DISPATCH-SAFETY INVARIANT: this helper is called from inside the DFS
- * dispatch loop of ndx_call. It MUST NOT read ndx_last_adapter.* — that TLS
- * slot is overwritten whenever a module body nested-calls another hook via
- * ndx_call, and we are mid-iteration of the *outer* call.
- *
- * Caller must supply hook_id and name from a stable source on its stack.
- *
- * Returns resolved callback, or NULL if the module does not export this
- * hook. Returns (void *)-1 (cast via NDX_FN_RESOLVE_OOM) if cache growth
- * fails; caller treats this as abort (returns NDX_ERR_INVALID).
- */
-#define NDX_FN_RESOLVE_OOM ((void *)(uintptr_t)-1)
-
-static inline void * __attribute__((always_inline, hot))
-fn_cache_resolve(ndx_mod_entry_t *me, int hook_id, const char *name)
-{
-	if (likely(hook_id >= 0 && hook_id < me->fn_cache_cap)) {
-		void *cb = me->fn_cache[hook_id];
-		if (likely(cb)) return cb == NDX_FN_NOT_FOUND ? NULL : cb;
-	} else if (hook_id >= 0) {
-		if (module_ensure_fn_cache_cap(me, hook_id + 16) < 0)
-			return NDX_FN_RESOLVE_OOM;
-	}
-
-	void *cb = module_lookup_symbol_raw(me->handle, name);
-	if (hook_id >= 0)
-		me->fn_cache[hook_id] = cb ? cb : NDX_FN_NOT_FOUND;
-	return cb;
-}
-
-/*
- * fn_cache_prewarm — eagerly resolve all currently-known hooks for one
- * module. Called at module-load time (T1.1) so the first hot-path call
- * doesn't pay dlsym latency. Also called from ndx_areg for every loaded
- * module when a new hook ID is minted, so the cache stays warm as the
- * hook ID space grows.
- *
- * Returns 0 on success, -1 if cache growth (realloc) failed; caller
- * should treat -1 as a soft failure (lazy resolve will retry per-call).
- */
-static int
-fn_cache_prewarm(ndx_mod_entry_t *me)
-{
-	if (!me || !me->handle) return 0;
-	int needed = ndx_hook_id_counter;
-	if (needed <= 0) return 0;
-	if (module_ensure_fn_cache_cap(me, needed + 16) < 0) return -1;
-	/* Iterate hook_id_hd (name → hook_id) and dlsym each in this module */
-	unsigned c = qmap_iter(hook_id_hd, NULL, 0);
-	const void *key, *value;
-	while (qmap_next(&key, &value, c)) {
-		const char *name = key;
-		int hook_id = *(const int *)value;
-		if (hook_id < 0 || hook_id >= me->fn_cache_cap) continue;
-		if (me->fn_cache[hook_id]) continue; /* already resolved */
-		void *cb = module_lookup_symbol_raw(me->handle, name);
-		me->fn_cache[hook_id] = cb ? cb : NDX_FN_NOT_FOUND;
-	}
-	return 0;
-}
-
-/*
- * ndx_dispatch_module — single per-module dispatch step used by ndx_call.
- *
- * always_inline guarantees zero call overhead; commit_ret
- * is a compile-time constant per call site so its branch is folded away.
- *
- * Returns:
- *   0                  → ran successfully (caller bumps ran counter)
- *  -1                  → skipped (module doesn't export this hook, or
- *                        me->indx is NULL)
- *   NDX_ERR_INVALID    → fn_cache growth failed; caller propagates per
- *                        its dispatch context (fast path: set errno +
- *                        return
- *
- * DISPATCH-SAFETY INVARIANT: helper takes hook_id/name/adapter as
- * parameters from caller's stack. It does NOT read ndx_last_adapter.
- * See fn_cache_resolve comment.
- */
-static inline int __attribute__((always_inline, hot))
-ndx_dispatch_module(ndx_mod_entry_t *me,
-                    int              hook_id,
-                    const char      *name,
-	ndx_adapter_t   *adapter,
-	void           (*call_fn)(void *, void *, void *),
-	void            *retp,
-	void            *arg,
-	int              commit_ret,
-	uint64_t         current_region_id)
-{
-	ndx_t *indx = me->indx;
-	if (unlikely(!indx)) return -1;
-
-	void *cb = fn_cache_resolve(me, hook_id, name);
-	if (unlikely(cb == NDX_FN_RESOLVE_OOM)) return NDX_ERR_INVALID;
-	if (!cb) return -1;
-
-	indx->adapter      = adapter;
-	indx->region_state = me->region_state;
-
-	ndx_region_entry_t *prev_rentry = ndx_current_region_entry;
-	uint64_t region_changed = (indx->region_id != current_region_id);
-	if (unlikely(region_changed))
-		set_current_region(indx->region_id, me->region_entry);
-
-	call_fn(retp, cb, arg);
-
-	if (unlikely(region_changed))
-		set_current_region(current_region_id, prev_rentry);
-
-	if (commit_ret)
-		memcpy(adapter->ret, retp, adapter->ret_size);
-
-	return 0;
-}
-
-typedef struct {
-	int                 hook_id;
-	void              (*dispatch_call)(void *, void *, void *);
-	ndx_region_entry_t *caller_region_entry;
-	int                 has_denies;
-	ndx_region_entry_t *anc_chain[65];
-	int                 anc_n;
-} ndx_call_plan_t;
-
-typedef struct {
-	void               *retp;
-	ndx_adapter_t      *reg;
-	void               *arg;
-	uint64_t            region_id;
-	int                 pre_err;
-	int                 ret;
-	unsigned            ran;
-	ndx_call_plan_t     plan;
-} ndx_call_ctx_t;
-
-static int
-ndx_call_run_fast(ndx_call_ctx_t *ctx);
-
-static int
-ndx_call_resolve_region(ndx_call_ctx_t *ctx)
-{
-	ndx_region_entry_t *caller_region_entry = ndx_current_region_entry;
-	if (unlikely(!caller_region_entry))
-		caller_region_entry = region_lookup(ctx->region_id);
-
-	uint8_t sflags = caller_region_entry ? caller_region_entry->subtree_flags : 0;
-	ctx->plan.caller_region_entry = caller_region_entry;
-	ctx->plan.has_denies = (sflags & NDX_SUBTREE_SECURITY_MASK) != 0;
-	ctx->plan.anc_n = 0;
-
-	if (unlikely(sflags & NDX_SUBTREE_ANY_MASK) && caller_region_entry)
-		ctx->plan.anc_n = region_ancestor_chain(caller_region_entry, ctx->plan.anc_chain, 65);
-
-	return NDX_OK;
-}
-
-static int
-ndx_call_prepare(ndx_call_ctx_t *ctx)
-{
-	ndx_adapter_t *reg = ctx->reg;
-	int hook_id = reg->hook_id;
-
-	if (unlikely(hook_id < 0)) {
-		const void *hid_v = qmap_get(hook_id_hd, reg->name);
-		if (!hid_v)
-			return NDX_ERR_NOTFOUND;
-		hook_id = *(const int *)hid_v;
-		reg->hook_id = hook_id;
-		if (hook_id >= 0 && hook_id < ndx_adapter_by_id_cap) {
-			const ndx_adapter_t *canonical = ndx_adapter_by_id[hook_id];
-			if (canonical && !reg->call) {
-				reg->call     = canonical->call;
-				reg->ret_size = canonical->ret_size;
-				reg->arg_size = canonical->arg_size;
-			}
-		}
-		if (unlikely(reg->ret_size > NDX_MAX_RET_SIZE))
-			return NDX_ERR_TOOBIG;
-	}
-
-	void (*dispatch_call)(void *, void *, void *) = reg->call;
-	if (unlikely(!dispatch_call && hook_id >= 0 && hook_id < ndx_adapter_by_id_cap)) {
-		const ndx_adapter_t *canonical = ndx_adapter_by_id[hook_id];
-		if (canonical)
-			dispatch_call = canonical->call;
-	}
-	if (unlikely(!dispatch_call))
-		return NDX_ERR_NOTFOUND;
-
-	ctx->plan.hook_id = hook_id;
-	ctx->plan.dispatch_call = dispatch_call;
-	return NDX_OK;
-}
-
-static int
-ndx_call_check_region_security(ndx_call_ctx_t *ctx)
-{
-	ndx_adapter_t *reg = ctx->reg;
-
-	if (likely(!ctx->plan.has_denies))
-		return NDX_OK;
-
-	for (int i = 0; i < ctx->plan.anc_n; i++) {
-		if (ctx->plan.anc_chain[i]->denied_hooks_set &&
-		    qmap_get(ctx->plan.anc_chain[i]->denied_hooks_set, reg->name))
-			return NDX_ERR_EPERM;
-	}
-
-	return NDX_OK;
-}
-
-static int
-ndx_call_check_security(ndx_call_ctx_t *ctx)
-{
-	int ret = ndx_call_resolve_region(ctx);
-	if (ret != NDX_OK)
-		return ret;
-	return ndx_call_check_region_security(ctx);
-}
-
-static inline void
-ndx_call_prime_last(ndx_adapter_t *adapter, void *retp)
-{
-	ndx_last_ran = 0;
-	ndx_last_retp = retp;
-	ndx.adapter = adapter;
-}
-
-static inline void
-ndx_call_publish_ret(ndx_call_ctx_t *ctx, const void *ret_src)
-{
-	ndx_last_ran = ctx->ran;
-	ndx_set_last_ret(ctx->ran ? ret_src : NULL, ctx->reg->ret_size);
-	if (!ctx->ran && ctx->retp)
-		memset(ctx->retp, 0, ctx->reg->ret_size);
-	ndx.adapter = ctx->reg;
-}
-
-static inline void
-ndx_call_publish_err(ndx_call_ctx_t *ctx)
-{
-	ndx_last_ran = 0;
-	ndx_set_last_ret(NULL, ctx->reg ? ctx->reg->ret_size : 0);
-	ndx_zero_ret(ctx->retp, ctx->reg);
-	ndx.adapter = ctx->reg;
-}
-
-static int
-ndx_call_dispatch(ndx_call_ctx_t *ctx)
-{
-	return ndx_call_run_fast(ctx);
-}
-
-static int
-ndx_call_finish(ndx_call_ctx_t *ctx)
-{
-	ndx_call_publish_ret(ctx, ctx->retp);
-	if (ctx->pre_err != NDX_OK && NDX_GET_ERR() == ctx->pre_err)
-		NDX_SET_ERR(NDX_OK);
-	return NDX_OK;
-}
-
-static inline int
-ensure_region_dispatch_cache(ndx_region_entry_t *caller_region_entry)
-{
-	if (caller_region_entry && caller_region_entry->subtree_mods_dirty) {
-		if (region_rebuild_subtree_mods(caller_region_entry) < 0)
-			return NDX_ERR_INVALID;
-	}
-	return NDX_OK;
-}
-
-static int
-ndx_call_run_fast(ndx_call_ctx_t *ctx)
-{
-	ctx->ran = 0;
-	ndx_call_prime_last(ctx->reg, ctx->retp);
-
-	if (!ctx->plan.caller_region_entry)
-		return NDX_OK;
-	if (ensure_region_dispatch_cache(ctx->plan.caller_region_entry) != NDX_OK)
-		return NDX_ERR_INVALID;
-
-	ndx_mod_entry_t **mods = ctx->plan.caller_region_entry->subtree_mods;
-	int n = ctx->plan.caller_region_entry->subtree_mods_count;
-	for (int mi = 0; mi < n; mi++) {
-		ndx_mod_entry_t *me = mods[mi];
-		if (mi + 1 < n)
-			__builtin_prefetch(mods[mi + 1], 0, 1);
-		int did_run = dispatch_fast_module(me, ctx->reg, ctx->plan.dispatch_call,
-		                                   ctx->retp, ctx->arg,
-		                                   ctx->region_id,
-		                                   ctx->plan.anc_chain, ctx->plan.anc_n,
-		                                   ctx->plan.has_denies);
-		if (unlikely(did_run == NDX_ERR_INVALID))
-			return NDX_ERR_INVALID;
-		ctx->ran += did_run;
-	}
-
-	return NDX_OK;
-}
-
-static int
-ndx_call_fail(ndx_call_ctx_t *ctx)
-{
-	ndx_call_publish_err(ctx);
-	NDX_SET_ERR(ctx->ret);
-	return ctx->ret;
-}
-
-int __attribute__((hot, flatten))
-ndx_call(void *retp, ndx_adapter_t *reg, void *arg)
-{
-	if (unlikely(!ndx_inited))
-		ndx_init_once();
-
-	if (!reg) {
-		NDX_SET_ERR(NDX_ERR_NOTFOUND);
-		return NDX_ERR_NOTFOUND;
-	}
-
-	ndx_call_ctx_t ctx = {
-		.retp = retp,
-		.reg = reg,
-		.arg = arg,
-		.region_id = ndx_current_region_id,
-		.pre_err = NDX_GET_ERR(),
-		.ret = NDX_OK,
-	};
-
-	ctx.ret = ndx_call_prepare(&ctx);
-	if (ctx.ret != NDX_OK)
-		return ndx_call_fail(&ctx);
-
-	ctx.ret = ndx_call_check_security(&ctx);
-	if (ctx.ret != NDX_OK)
-		return ndx_call_fail(&ctx);
-
-	ctx.ret = ndx_call_dispatch(&ctx);
-	if (ctx.ret != NDX_OK)
-		return ndx_call_fail(&ctx);
-
-	return ndx_call_finish(&ctx);
-}
-
-/* -------------------------------------------------------------------------
- * ndx_areg
- * ------------------------------------------------------------------------- */
-
-unsigned
-ndx_areg(char *name, ndx_adapter_t *adapter)
-{
-	ndx_init_once();
-	if (adapter->ret_size > NDX_MAX_RET_SIZE) {
-		NDX_SET_ERR(NDX_ERR_TOOBIG);
-		return NDX_INVALID;
-	}
-	const unsigned *existing = qmap_get(sica_hd, name);
-	if (existing)
-	    return *existing;
-	qmap_put(sica_hd, name, &adapter);
-	/* Assign a monotonic hook ID for the fn_cache index */
-	int hook_id = ndx_hook_id_counter++;
-	qmap_put(hook_id_hd, name, &hook_id);
-	/* Write the ID back into the adapter so callers can skip the hash lookup */
-	adapter->hook_id = hook_id;
-	/* Grow adapter-by-id array and store pointer */
-	if (hook_id >= ndx_adapter_by_id_cap) {
-		int new_cap = hook_id + 16;
-		ndx_adapter_t **tmp = realloc(ndx_adapter_by_id,
-		                              new_cap * sizeof(ndx_adapter_t *));
-		if (unlikely(!tmp)) {
-			NDX_SET_ERR(NDX_ERR_INVALID);
-			return NDX_ERR_INVALID;
-		}
-		ndx_adapter_by_id = tmp;
-		memset(ndx_adapter_by_id + ndx_adapter_by_id_cap, 0,
-		       (new_cap - ndx_adapter_by_id_cap) * sizeof(ndx_adapter_t *));
-		ndx_adapter_by_id_cap = new_cap;
-	}
-	ndx_adapter_by_id[hook_id] = adapter;
-	/* T1.1: a new hook ID has been minted — eagerly resolve it in every
-	 * already-loaded module so the first dispatch finds it cached. */
-	if (mod_hd) {
-		unsigned c = qmap_iter(mod_hd, NULL, 0);
-		const void *k, *v;
-		while (qmap_next(&k, &v, c)) {
-			ndx_mod_entry_t *m = qmap_ptr(v);
-			if (m) (void)fn_cache_prewarm(m);
-		}
-	}
-	NDX_SET_ERR(NDX_OK);
-	return 0;
-}
-
 /* -------------------------------------------------------------------------
  * ndx_shutdown
  * ------------------------------------------------------------------------- */
-
-void
-ndx_shutdown(void)
-{
-	{
-		unsigned c = qmap_iter(mod_hd, NULL, 0);
-		const void *key, *value;
-		while (qmap_next(&key, &value, c)) {
-			ndx_mod_entry_t *entry = qmap_ptr(value);
-			if (!entry)
-				continue;
-			free(entry->fn_cache);
-			dlclose(entry->handle);
-		}
-	}
-	path_intern_free_all();
-	/* Free region entries */
-	{
-		unsigned c = qmap_iter(region_hd, NULL, 0);
-		const void *key, *value;
-		while (qmap_next(&key, &value, c)) {
-			ndx_region_entry_t *e = qmap_ptr(value);
-			region_entry_free(e);
-		}
-	}
-	qmap_close(mod_by_region_hd);
-	mod_by_region_hd = 0;
-	/* Reset thread-local region pointer — entries were freed above */
-	ndx_current_region_entry = NULL;
-	ndx_current_region_id = NDX_REGION_ROOT;
-	/* Reset TLS state for ndx.last() */
-	ndx_last_ran = 0;
-	ndx_last_retp = NULL;
-	ndx_inited = 0;
-}
-
-/* -------------------------------------------------------------------------
- * Init
- * ------------------------------------------------------------------------- */
-
-static void
-shared_init(void)
-{
-	ndx.areg             = ndx_areg;
-	ndx.call             = ndx_call;
-	ndx.load             = ndx_load;
-	ndx.err              = ndx_errno;
-	ndx.strerror         = ndx_strerror;
-	ndx.deny             = ndx_deny;
-	ndx.require_claim    = ndx_require_claim;
-	ndx.region_each      = ndx_region_each;
-	ndx.with_region      = ndx_with_region;
-	ndx.current_region   = ndx_current_region;
-	ndx.unload           = ndx_unload;
-	ndx.reload           = ndx_reload;
-}
-
-static void __attribute__((cold))
-ndx_init_once(void)
-{
-	if (likely(ndx_inited))
-		return;
-	ndx_inited = 1;
-
-	if (!ndx_ptr_type)
-		ndx_ptr_type = qmap_reg(sizeof(void *));
-
-	if (!ndx_mod_entry_type)
-		ndx_mod_entry_type = qmap_reg(sizeof(ndx_mod_entry_t *));
-
-	if (!ndx_region_entry_type)
-		ndx_region_entry_type = qmap_reg(sizeof(ndx_region_entry_t *));
-
-	if (mod_key_type == QM_MISS)
-		mod_key_type = qmap_mreg(mod_key_measure);
-
-	if (!region_id_type)
-		region_id_type = qmap_reg(sizeof(uint64_t));
-
-	if (!ndx_int_type)
-		ndx_int_type = qmap_reg(sizeof(int));
-
-	if (!sica_hd)
-		sica_hd = qmap_open(NULL, NULL, QM_STR, ndx_ptr_type, SICA_MASK, 0);
-	if (!hook_id_hd)
-		hook_id_hd = qmap_open(NULL, NULL, QM_STR, ndx_int_type, SICA_MASK, 0);
-	if (!path_intern_hd)
-		path_intern_hd = qmap_open(NULL, NULL, QM_STR, ndx_ptr_type, MOD_MASK, 0);
-	mod_hd           = qmap_open(NULL, NULL, mod_key_type, ndx_ptr_type, MOD_MASK, 0);
-	mod_by_region_hd = qmap_open(NULL, NULL, region_id_type, ndx_ptr_type,
-	                             MOD_MASK, QM_SORTED | QM_MULTIVALUE);
-	region_hd = qmap_open(NULL, NULL, region_id_type, ndx_ptr_type, REGION_MASK, 0);
-
-	shared_init();
-	region_ensure_root();
-}
-
-#ifndef _WIN32
-__attribute__((constructor))
-#endif
-  void ndx_init(void)
-{
-	ndx_init_once();
-}

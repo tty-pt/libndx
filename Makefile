@@ -1,7 +1,10 @@
 all := libndx
 LDLIBS-libndx := -lqsys -lqmap
+libndx-obj-y := src/libndx-module.o src/libndx-dispatch.o src/libndx-runtime.o
 
 include ../mk/include.mk
+
+objects-set.mk: Makefile
 
 TEST_DIR := tests
 TEST_CFLAGS := -Iinclude -pthread

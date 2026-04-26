@@ -7,6 +7,18 @@
 /* Forward declaration — full definition follows below */
 typedef struct ndx_t_s ndx_t;
 
+typedef struct ndx_dispatch_slot {
+	struct ndx_mod_entry *me;
+	void                 *cb;
+} ndx_dispatch_slot_t;
+
+typedef struct ndx_hook_dispatch_cache {
+	ndx_dispatch_slot_t   *slots;
+	int                   count;
+	int                   cap;
+	uint64_t              region_gen;
+} ndx_hook_dispatch_cache_t;
+
 /* -------------------------------------------------------------------------
  * Internal region structures
  * ------------------------------------------------------------------------- */
@@ -58,6 +70,7 @@ typedef struct ndx_region_entry {
 #define NDX_SUBTREE_HAS_DENY         0x01u
 #define NDX_SUBTREE_SECURITY_MASK    NDX_SUBTREE_HAS_DENY
 #define NDX_SUBTREE_ANY_MASK         NDX_SUBTREE_HAS_DENY
+	uint64_t                  dispatch_gen;
 
 	ndx_claim_handler_fn_t   *claim_handler;
 	void                     *claim_handler_ud;
@@ -82,6 +95,10 @@ typedef struct ndx_region_entry {
 	int                       subtree_mods_count;
 	int                       subtree_mods_cap;
 	uint8_t                   subtree_mods_dirty;
+	/* Per-hook dispatch vectors for this region's subtree, built lazily
+	 * from subtree_mods and invalidated by the global dispatch epoch. */
+	ndx_hook_dispatch_cache_t *hook_dispatch;
+	int                        hook_dispatch_cap;
 } ndx_region_entry_t;
 
 /*
@@ -121,6 +138,8 @@ typedef struct ndx_mod_entry {
     /* Module that loaded this one (NULL if loaded by host).
      * Used for cascade-unload of children. */
     struct ndx_mod_entry *parent_entry;
+    uint64_t *hook_impl_bits;
+    int       hook_impl_words;
     /* Owned copy of the composite hash key ("path\0<region_hex>") for removal */
     char *mod_key;
 } ndx_mod_entry_t;
