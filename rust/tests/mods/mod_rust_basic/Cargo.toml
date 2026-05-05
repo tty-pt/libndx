@@ -1,0 +1,17 @@
+[package]
+name = "mod-rust-basic"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "mod_rust_basic"
+crate-type = ["cdylib"]
+
+[dependencies]
+ndx = { path = "../../../ndx" }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

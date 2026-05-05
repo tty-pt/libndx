@@ -1,0 +1,9 @@
+[workspace]
+members = [
+    "ndx-macros",
+    "ndx",
+    "tests/mods/mod_rust_basic",
+    "tests/mods/mod_rust_caller",
+    "tests/mods/mod_rust_definer",
+]
+resolver = "2"

@@ -1,0 +1,18 @@
+[package]
+name = "ndx-macros"
+version = "0.1.0"
+edition = "2021"
+description = "Proc-macro attributes for writing libndx modules and hooks in Rust"
+license = "BSD-2-Clause"
+readme = "../README.md"
+repository = "https://github.com/tty-pt/libndx"
+keywords = ["plugin", "hooks", "modules", "proc-macro", "extensibility"]
+categories = ["development-tools", "rust-patterns"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"

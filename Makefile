@@ -208,6 +208,47 @@ ${TEST_DIR}/test_game${EXE}: ${TEST_DIR} ${TEST_DIR}/test_game.c ${GAME_HOOKS} l
 	${cc} -o $@ ${TEST_DIR}/test_game.c ${CFLAGS} ${TEST_CFLAGS} \
 		-I${TEST_DIR} ${LDFLAGS} -lndx ${LDLIBS-libndx} ${TEST_LDFLAGS}
 
+RUST_MANIFEST := rust/Cargo.toml
+RUST_TARGET_DIR := /tmp/ndx-rust-target
+
+${TEST_DIR}/mods/mod_rust_basic.${SO}: \
+		rust/tests/mods/mod_rust_basic/src/lib.rs \
+		rust/tests/mods/mod_rust_basic/Cargo.toml \
+		rust/ndx/src/lib.rs rust/ndx-macros/src/lib.rs \
+		lib/libndx.${SO}
+	cargo build --manifest-path ${RUST_MANIFEST} \
+		--package mod-rust-basic \
+		--target-dir ${RUST_TARGET_DIR}
+	cp ${RUST_TARGET_DIR}/debug/libmod_rust_basic.${SO} $@
+
+${TEST_DIR}/mods/mod_rust_caller.${SO}: \
+		rust/tests/mods/mod_rust_caller/src/lib.rs \
+		rust/tests/mods/mod_rust_caller/Cargo.toml \
+		rust/ndx/src/lib.rs rust/ndx-macros/src/lib.rs \
+		lib/libndx.${SO}
+	cargo build --manifest-path ${RUST_MANIFEST} \
+		--package mod-rust-caller \
+		--target-dir ${RUST_TARGET_DIR}
+	cp ${RUST_TARGET_DIR}/debug/libmod_rust_caller.${SO} $@
+
+${TEST_DIR}/mods/mod_rust_definer.${SO}: \
+		rust/tests/mods/mod_rust_definer/src/lib.rs \
+		rust/tests/mods/mod_rust_definer/Cargo.toml \
+		rust/ndx/src/lib.rs rust/ndx-macros/src/lib.rs \
+		lib/libndx.${SO}
+	cargo build --manifest-path ${RUST_MANIFEST} \
+		--package mod-rust-definer \
+		--target-dir ${RUST_TARGET_DIR}
+	cp ${RUST_TARGET_DIR}/debug/libmod_rust_definer.${SO} $@
+
+${TEST_DIR}/test_rust${EXE}: ${TEST_DIR} ${TEST_DIR}/test_rust.c \
+		${TEST_DIR}/mods/mod_rust_basic.${SO} \
+		${TEST_DIR}/mods/mod_rust_caller.${SO} \
+		${TEST_DIR}/mods/mod_rust_definer.${SO} \
+		lib/libndx.${SO}
+	${cc} -o $@ ${TEST_DIR}/test_rust.c ${CFLAGS} ${TEST_CFLAGS} \
+		${LDFLAGS} -lndx ${LDLIBS-libndx} ${TEST_LDFLAGS}
+
 TEST_MODS := ${TEST_DIR}/test_mod.${SO} \
 	${TEST_DIR}/mods/mod_basic.${SO} \
 	${TEST_DIR}/mods/mod_multi.${SO} \
@@ -239,7 +280,10 @@ TEST_MODS := ${TEST_DIR}/test_mod.${SO} \
 	${TEST_DIR}/mods/mod_cascade_deep_c.${SO} \
 	${TEST_DIR}/mods/mod_region_state.${SO} \
 	${TEST_DIR}/mods/mod_ptr_args.${SO} \
-	${TEST_DIR}/mods/mod_ptr_args_caller.${SO}
+	${TEST_DIR}/mods/mod_ptr_args_caller.${SO} \
+	${TEST_DIR}/mods/mod_rust_basic.${SO} \
+	${TEST_DIR}/mods/mod_rust_caller.${SO} \
+	${TEST_DIR}/mods/mod_rust_definer.${SO}
 
 TEST_BINS := ${TEST_DIR}/test_core${EXE} \
 	${TEST_DIR}/test_errors${EXE} \
@@ -254,7 +298,8 @@ TEST_BINS := ${TEST_DIR}/test_core${EXE} \
 	${TEST_DIR}/test_game${EXE} \
 	${TEST_DIR}/test_unload${EXE} \
 	${TEST_DIR}/test_region_state${EXE} \
-	${TEST_DIR}/test_ptr_args${EXE}
+	${TEST_DIR}/test_ptr_args${EXE} \
+	${TEST_DIR}/test_rust${EXE}
 
 BENCH_BIN := ${TEST_DIR}/bench_dispatch${EXE}
 VALIDATION_BINS := ${TEST_BINS} ${BENCH_BIN}
@@ -285,3 +330,6 @@ test-clean:
 		${TEST_BINS} \
 		${TEST_DIR}/test_threads${EXE} \
 		${TEST_DIR}/bench_dispatch${EXE}
+
+rust-clean:
+	rm -rf ${RUST_TARGET_DIR}
