@@ -198,6 +198,10 @@ if (r != NDX_OK)
 
 ### Pledge
 
+> **⚠️ Not yet implemented.** The `ndx_ctx` struct reserves a `pledge` slot for ABI
+> compatibility, but the runtime dispatch logic does not enforce pledges yet.
+> This section describes the planned semantics.
+
 #### `int ndx_pledge(const char *hook_name)`
 
 Restrict who may call a hook. The first module to pledge a hook name within its region becomes the sole permitted caller of that hook in that region. Any other caller attempting to dispatch the hook receives `NDX_ERR_EPERM`.
@@ -217,23 +221,28 @@ ndx_pledge("get_token");
 
 All region functions operate on the caller's **current region**, set implicitly by the dispatch and load machinery. There are no explicit region-ID parameters.
 
-#### `int ndx_claim(uint8_t bits)`
+#### `MODULE_API uint8_t ndx_claim = N`
 
-Claim a child region of `bits` width under the caller's current region. Only valid inside `ndx_install()`.
+Module-side region declaration. A module opts into having its own sub-region by
+exporting this data symbol with the requested bit-width `N`.
 
-The parent's claim handler is invoked first. It may approve, reduce `bits`, or reject. If no handler is registered, the call always fails with `NDX_ERR_EPERM`.
+This is a **data symbol**, not a function. The host reads it at load time via
+`dlsym`. If the parent region has a claim handler installed (via
+`ndx_require_claim`), the host performs the claim automatically before calling
+`ndx_install()`. If no handler is registered, the symbol is ignored and the
+module loads flat into the parent's region.
 
 On success:
-- The module's region becomes the newly created child.
-- All subsequent `ndx_load`, `ndx_deny`, `ndx_intercept`, `ndx_pledge`, and `ndx_require_claim` calls operate on the child region.
-
-Returns `NDX_OK`, `NDX_ERR_EPERM` (rejected or no handler), or `NDX_ERR_TOOBIG` (no free slot).
+- The module's region becomes the newly created child of the parent.
+- All subsequent `ndx_load`, `ndx_deny`, `ndx_require_claim` calls operate on the child region.
 
 ```c
+// mods/sub_mod.c
+MODULE_API uint8_t ndx_claim = 4; // request a 4-bit sub-region
+
 void ndx_install(void)
 {
-    if (ndx_claim(4) != NDX_OK) return; // request 4-bit slice
-    // now in our own region
+    // already in our own region — host claimed it for us
     ndx_load("mods/sub_module");
 }
 ```
@@ -293,6 +302,10 @@ ndx_deny("mods/untrusted", NDX_DENY_MODULE);
 ```
 
 #### `int ndx_intercept(const char *hook_name, ndx_interceptor_fn_t *fn, void *ud)`
+
+> **⚠️ Not yet implemented.** The `ndx_ctx` struct reserves an `intercept` slot
+> for ABI compatibility, but the dispatch loop does not call interceptors yet.
+> This section describes the planned semantics.
 
 Register a middleware interceptor for `hook_name` in the caller's current region. Interceptors run outermost-first (root region before child regions). Each interceptor may inspect or modify arguments and the return value, call `next` to continue, or return early to block.
 
@@ -408,15 +421,16 @@ static int claim_handler(const char *path, uint8_t req,
     return NDX_OK;
 }
 
+/* Request a 1-bit sub-region — data symbol, not a function call */
+MODULE_API uint8_t ndx_claim = 1;
+
 void ndx_install(void)
 {
     /* Register handler so child modules may claim */
     ndx_require_claim(claim_handler, NULL);
 
-    /* Claim a 1-bit slice for this module */
-    if (ndx_claim(1) != NDX_OK) return;
-
-    /* Now in our own region: install interceptor and load worker */
+    /* Already in our own region — host claimed it for us.
+     * Now we can install interceptor and load worker. */
     ndx_intercept("on_tick", halving_interceptor, NULL);
     ndx_load("mods/worker");
 }

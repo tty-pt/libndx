@@ -2,4 +2,6 @@
 PROJECT_NAME           = "ndx"
 MAN_EXTENSION          = 3
 MAN_LINKS              = YES
-SEPARATE_MEMBER_PAGES  = YES
+# Avoid standalone member pages such as `name.3`, which collide with
+# identically named pages from dependencies like libqmap.
+SEPARATE_MEMBER_PAGES  = NO

@@ -1,6 +1,7 @@
 all := libndx
 LDLIBS-libndx := -lqsys -lqmap
 libndx-obj-y := src/libndx-module.o src/libndx-dispatch.o src/libndx-runtime.o
+LDLIBS-libndx-watch := -lndx -lqsys -lqmap -lpthread
 
 include ../mk/include.mk
 

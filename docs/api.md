@@ -3,7 +3,7 @@
 ## Principles
 
 1. **Retro-compatibility**: code that never uses regions continues to work unchanged.
-   `NDX_DEF`, `NDX_DECL`, `NDX_CALL`, `ndx_load`, `ndx_pledge`, `ndx_shutdown`,
+   `NDX_HOOK_DEF`, `NDX_HOOK_DECL`, `NDX_CALL`, `ndx_load`, `ndx_pledge`, `ndx_shutdown`,
    `ndx_errno`, `ndx_strerror` all keep their pre-region signatures.
 
 2. **Region IDs are internal**. No public function takes or returns a raw region ID.
@@ -34,10 +34,10 @@
 
 ```c
 // Define a hook (host or module implementation)
-NDX_DEF(ftype, fname, ...)
+NDX_HOOK_DEF(ftype, fname, ...)
 
 // Declare a hook (consumer-side: generates call_ wrapper only)
-NDX_DECL(ftype, fname, ...)
+NDX_HOOK_DECL(ftype, fname, ...)
 
 // Dispatch to all modules implementing fname whose region is a
 // descendant-or-equal of the caller's current region
@@ -54,7 +54,7 @@ void        ndx_shutdown(void);
 int         ndx_errno(void);
 const char *ndx_strerror(int err);
 
-// Adapter registration — called automatically by NDX_DEF constructors
+// Adapter registration — called automatically by NDX_HOOK_DEF constructors
 unsigned ndx_areg(char *name, ndx_adapter_t *adapter);
 ```
 
@@ -230,7 +230,7 @@ space. The prefix length (`plen`) is stored in the internal
 #include <ttypt/ndx-mod.h>
 #include "game_hooks.h"
 
-NDX_DEF(int, on_damage, int, player_id, int, damage) {
+NDX_HOOK_DEF(int, on_damage, int, player_id, int, damage) {
     printf("Player %d took %d damage\n", player_id, damage);
     return 0;
 }
@@ -281,7 +281,7 @@ static int death_claim_handler(const char *module_path,
     return NDX_OK;
 }
 
-NDX_DEF(void, on_death, int, entity_id) {
+NDX_HOOK_DEF(void, on_death, int, entity_id) {
     // Dispatch reaches all sub-handlers in descendant regions automatically
     NDX_CALL(NULL, on_death, entity_id);
 }
@@ -301,7 +301,7 @@ void ndx_install(void) {
 // host.c
 #include "game_hooks.h"
 
-NDX_DEF(void, on_death, int, entity_id);
+NDX_HOOK_DEF(void, on_death, int, entity_id);
 
 int main(void) {
     ndx_load("mods/mod_universe"); // loads transitively
