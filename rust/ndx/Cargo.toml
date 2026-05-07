@@ -1,6 +1,6 @@
 [package]
 name = "ndx"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Ergonomic Rust bindings for libndx — hook-based extensibility and dynamic module loading"
 license = "BSD-2-Clause"
@@ -13,4 +13,4 @@ categories = ["api-bindings", "development-tools"]
 crate-type = ["rlib"]
 
 [dependencies]
-ndx-macros = { path = "../ndx-macros", version = "0.1" }
+ndx-macros = { path = "../ndx-macros", version = "0.1.1" }

@@ -6,7 +6,7 @@ static struct ndx_ctx ndx;
 
 struct ndx_ctx;
 
-MODULE_API struct ndx_ctx *
+MODULE_API __attribute__((weak)) struct ndx_ctx *
 get_ndx_ptr(void)
 {
 	return &ndx;

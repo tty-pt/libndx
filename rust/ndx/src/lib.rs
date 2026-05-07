@@ -170,6 +170,9 @@ impl NdxCtx {
 
 extern "C" {
 	pub fn ndx_areg(name: *mut c_char, adapter: *mut NdxAdapterT) -> c_uint;
+	/// Register this module's NDX context from a .init_array constructor so
+	/// the host can initialize it even when get_ndx_ptr lookup fails.
+	pub fn ndx_self_init_ctx(ctx: *mut NdxCtx);
 }
 
 // ---------------------------------------------------------------------------

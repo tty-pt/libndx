@@ -1,4 +1,11 @@
 #include "libndx-internal.h"
+#include <stdio.h>
+
+static void _dbg(const char *msg) {
+	FILE *f = fopen("/tmp/ndx_bind.log", "a");
+	if (!f) f = fopen("tmp/ndx_bind.log", "a");
+	if (f) { fputs(msg, f); fclose(f); }
+}
 
 int _mod_run(void *sl, const char *symbol) {
 	void (*cb)(void) = NULL;
@@ -45,13 +52,16 @@ int _mod_load(char *fname) {
 	};
 	int ret = NDX_OK;
 
+	_dbg("_mod_load: called\n");
 	ret = mod_load_open_handle(&tx, fname);
 	if (ret != NDX_OK) {
 		NDX_SET_ERR(ret);
 		return ret;
 	}
-	if (mod_load_try_reuse_existing(&tx))
+	if (mod_load_try_reuse_existing(&tx)) {
+		_dbg("_mod_load: reuse_existing fired\n");
 		return NDX_OK;
+	}
 
 	ret = mod_load_alloc_entry(&tx, fname);
 	if (ret != NDX_OK)

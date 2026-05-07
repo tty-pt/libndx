@@ -92,6 +92,7 @@ extern __thread void               *ndx_last_retp;
 extern __thread uint64_t            ndx_current_region_id;
 extern __thread ndx_region_entry_t *ndx_current_region_entry;
 extern __thread ndx_mod_entry_t    *ndx_loading_mod;
+extern __thread ndx_t              *ndx_pending_ctx;
 
 void set_current_region(uint64_t id, ndx_region_entry_t *entry);
 void *qmap_ptr(const void *value);

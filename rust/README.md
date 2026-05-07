@@ -194,15 +194,15 @@ They all operate through the injected `NDX` context (set by the host before each
 hook dispatch) and return `Result<(), NdxError>` or the relevant value.
 
 | Function | Signature | Description |
-|---|---|---|
-| `load(path)` | `fn load(path: &str) -> Result<(), NdxError>` | Load a module by path (no `.so` extension) |
-| `unload(path)` | `fn unload(path: &str) -> Result<(), NdxError>` | Unload a previously loaded module |
-| `reload(path)` | `fn reload(path: &str) -> Result<(), NdxError>` | Reload a module in-place |
-| `deny(hook, module)` | `fn deny(hook: &str, module: &str) -> Result<(), NdxError>` | Deny a hook for a specific module in the current region |
-| `require_claim(bits, handler)` | `fn require_claim(bits: u8, handler: NdxClaimHandlerFn) -> Result<(), NdxError>` | Set a claim requirement and handler for child regions |
-| `region_each(cb, data)` | `fn region_each(cb: NdxRegionEachCbFn, data: *mut c_void) -> Result<(), NdxError>` | Iterate over child regions |
-| `with_region(region, cb, data)` | `fn with_region(region: u64, cb: NdxScopeFn, data: *mut c_void) -> Result<(), NdxError>` | Execute a closure in the context of a specific region |
-| `current_region()` | `fn current_region() -> u64` | Return the current region ID |
+|---|---|---|---|
+| `load(ndx, path)` | `unsafe fn load(ndx: &NdxCtx, path: &CStr) -> Result<(), NdxError>` | Load a module by path (no `.so` extension) |
+| `unload(ndx, path)` | `unsafe fn unload(ndx: &NdxCtx, path: &CStr) -> Result<(), NdxError>` | Unload a previously loaded module |
+| `reload(ndx, path)` | `unsafe fn reload(ndx: &NdxCtx, path: &CStr) -> Result<(), NdxError>` | Reload a module in-place |
+| `deny(ndx, what, ty)` | `unsafe fn deny(ndx: &NdxCtx, what: &CStr, ty: NdxDenyType) -> Result<(), NdxError>` | Deny a hook or module in the current region |
+| `require_claim(ndx, handler, ud)` | `unsafe fn require_claim(ndx: &NdxCtx, handler: Option<NdxClaimHandlerFn>, ud: *mut c_void) -> Result<(), NdxError>` | Set a claim handler for child regions |
+| `region_each(ndx, f, ud)` | `unsafe fn region_each(ndx: &NdxCtx, f: Option<NdxRegionEachCbFn>, ud: *mut c_void) -> Result<(), NdxError>` | Iterate over child regions |
+| `with_region(ndx, region_id, f, ud)` | `unsafe fn with_region(ndx: &NdxCtx, region_id: u64, f: Option<NdxScopeFn>, ud: *mut c_void) -> Result<(), NdxError>` | Execute a closure in the context of a specific region |
+| `current_region(ndx)` | `unsafe fn current_region(ndx: &NdxCtx) -> u64` | Return the current region ID |
 
 Example — a module that loads a peer module and then operates in a child region:
 
@@ -215,15 +215,8 @@ ndx_module!();
 #[ndx_listener]
 pub fn setup(_dummy: c_int) -> c_int {
     unsafe {
-        // Load another module.
-        load("path/to/peer_module").expect("peer load failed");
-
-        // Deny a hook for a specific module in this region.
-        deny("on_tick", "path/to/peer_module").ok();
-
-        // Print the current region ID.
-        let region = current_region();
-        let _ = region;
+        // Load another module.  NDX is injected by ndx_module!().
+        load(&NDX, c"path/to/peer_module").expect("peer load failed");
     }
     0
 }
