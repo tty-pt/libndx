@@ -481,6 +481,9 @@ pub fn ndx_hook_decl(_attr: TokenStream, item: TokenStream) -> TokenStream {
 // ---------------------------------------------------------------------------
 
 /// Emit the per-module `NDX: NdxCtx` static and `get_ndx_ptr` export.
+/// Also emits a `.init_array` constructor that calls `ndx_self_init_ctx` so
+/// the host can initialize NDX even when `get_ndx_ptr` lookup fails (e.g.
+/// due to Rust cdylib symbol-resolution quirks with dlsym).
 /// Call once at crate root.
 ///
 /// ```rust,ignore
@@ -495,6 +498,14 @@ pub fn ndx_module(_input: TokenStream) -> TokenStream {
         pub unsafe extern "C" fn get_ndx_ptr() -> *mut ::ndx::NdxCtx {
             &raw mut NDX
         }
+
+        unsafe extern "C" fn ndx_ctx_self_init() {
+            unsafe { ::ndx::ndx_self_init_ctx(&raw mut NDX); }
+        }
+
+        #[used]
+        #[link_section = ".init_array"]
+        static _NDX_CTX_SELF_INIT_P: unsafe extern "C" fn() = ndx_ctx_self_init;
     }
     .into()
 }

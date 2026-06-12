@@ -1,6 +1,6 @@
 [package]
 name = "ndx-macros"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Proc-macro attributes for writing libndx modules and hooks in Rust"
 license = "BSD-2-Clause"

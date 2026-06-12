@@ -48,6 +48,19 @@ __thread ndx_region_entry_t *ndx_current_region_entry = NULL;
  * parent_entry for cascade-unload tracking. */
 __thread ndx_mod_entry_t *ndx_loading_mod = NULL;
 
+/* Thread-local NDX context pointer self-registered by a Rust module's
+ * .init_array constructor (via ndx_self_init_ctx).  The constructor runs
+ * inside dlopen(), before mod_load_bind_ndx executes.  mod_load_bind_ndx
+ * reads this as a fallback when get_ndx_ptr is absent or unreachable, then
+ * clears it.  One pointer per thread is sufficient because dlopen is
+ * synchronous and modules are loaded one at a time per thread. */
+__thread ndx_t *ndx_pending_ctx = NULL;
+
+void
+ndx_self_init_ctx(struct ndx_ctx *ctx)
+{
+	ndx_pending_ctx = (ndx_t *)ctx;
+}
 /* Keep the id/pointer pair in sync atomically (within a thread). */
 void
 set_current_region(uint64_t id, ndx_region_entry_t *entry)
@@ -752,6 +765,22 @@ mod_load_abort(ndx_load_txn_t *tx, int err)
 		return err;
 
 	mod_load_restore_context(tx);
+	if (tx->mod_entry) {
+		module_cleanup_region_state(tx->mod_entry);
+		if (tx->mod_entry->region_entry) {
+			ndx_region_entry_t *rre = tx->mod_entry->region_entry;
+			if (tx->mod_entry->region_prev)
+				tx->mod_entry->region_prev->region_next = tx->mod_entry->region_next;
+			else
+				rre->mods_head = tx->mod_entry->region_next;
+			if (tx->mod_entry->region_next)
+				tx->mod_entry->region_next->region_prev = tx->mod_entry->region_prev;
+			else
+				rre->mods_tail = tx->mod_entry->region_prev;
+			region_mark_subtree_dirty(rre);
+			tx->mod_entry->region_entry = NULL;
+		}
+	}
 	if (tx->published_entry && tx->mod_entry) {
 		qmap_del(mod_by_region_hd, &tx->mod_entry->region_id);
 		qmap_del(mod_hd, tx->mod_entry->mod_key);
@@ -846,13 +875,78 @@ int
 mod_load_bind_ndx(ndx_load_txn_t *tx)
 {
 	get_ndx_func_t get_ndx = NULL;
+	ndx_t *indx = NULL;
 
 	module_lookup_symbol_fn(tx->handle, "get_ndx_ptr", &get_ndx, sizeof(get_ndx));
-	if (!get_ndx)
-		return NDX_OK;
+	{
+		FILE *dbg = fopen("/tmp/ndx_bind.log", "a");
+		if (!dbg) dbg = fopen("tmp/ndx_bind.log", "a");
+		if (dbg) {
+			fprintf(dbg, "mod_load_bind_ndx: fname=%s get_ndx=%p\n",
+				tx->stable_fname, (void *)get_ndx);
+			fclose(dbg);
+		}
+	}
+	if (get_ndx) {
+		indx = get_ndx();
+		{
+			FILE *dbg = fopen("/tmp/ndx_bind.log", "a");
+			if (!dbg) dbg = fopen("tmp/ndx_bind.log", "a");
+			if (dbg) {
+				fprintf(dbg, "mod_load_bind_ndx: get_ndx() => %p\n",
+					(void *)indx);
+				fclose(dbg);
+			}
+		}
+	}
 
-	ndx_t *indx = get_ndx();
+	/* Fallback: Rust cdylibs call ndx_self_init_ctx() from a .init_array
+	 * constructor (inside dlopen) to push their NDX pointer to us before
+	 * mod_load_bind_ndx runs. Use that when get_ndx_ptr lookup fails. */
+	if (!indx && ndx_pending_ctx) {
+		FILE *dbg = fopen("/tmp/ndx_bind.log", "a");
+		if (!dbg) dbg = fopen("tmp/ndx_bind.log", "a");
+		if (dbg) {
+			fprintf(dbg, "mod_load_bind_ndx: using ndx_pending_ctx=%p\n",
+				(void *)ndx_pending_ctx);
+			fclose(dbg);
+		}
+		indx = ndx_pending_ctx;
+	}
+
+	ndx_pending_ctx = NULL;
+
+	if (!indx) {
+		FILE *dbg = fopen("/tmp/ndx_bind.log", "a");
+		if (!dbg) dbg = fopen("tmp/ndx_bind.log", "a");
+		if (dbg) {
+			fprintf(dbg, "mod_load_bind_ndx: no NDX for %s\n",
+				tx->stable_fname);
+			fclose(dbg);
+		}
+		return NDX_OK;
+	}
+
+	{
+		FILE *dbg = fopen("/tmp/ndx_bind.log", "a");
+		if (!dbg) dbg = fopen("tmp/ndx_bind.log", "a");
+		if (dbg) {
+			fprintf(dbg,
+				"mod_load_bind_ndx: calling _ndx_init on %p for %s\n",
+				(void *)indx, tx->stable_fname);
+			fclose(dbg);
+		}
+	}
 	_ndx_init(indx, tx->stable_fname, tx->inherited_region_id);
+	{
+		FILE *dbg = fopen("/tmp/ndx_bind.log", "a");
+		if (!dbg) dbg = fopen("tmp/ndx_bind.log", "a");
+		if (dbg) {
+			fprintf(dbg, "mod_load_bind_ndx: NDX.call=%p for %s\n",
+				(void *)indx->call, tx->stable_fname);
+			fclose(dbg);
+		}
+	}
 	tx->mod_entry->indx = indx;
 	return NDX_OK;
 }

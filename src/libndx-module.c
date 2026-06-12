@@ -1,4 +1,11 @@
 #include "libndx-internal.h"
+#include <stdio.h>
+
+static void _dbg(const char *msg) {
+	FILE *f = fopen("/tmp/ndx_bind.log", "a");
+	if (!f) f = fopen("tmp/ndx_bind.log", "a");
+	if (f) { fputs(msg, f); fclose(f); }
+}
 
 int _mod_run(void *sl, const char *symbol) {
 	void (*cb)(void) = NULL;
@@ -45,13 +52,16 @@ int _mod_load(char *fname) {
 	};
 	int ret = NDX_OK;
 
+	_dbg("_mod_load: called\n");
 	ret = mod_load_open_handle(&tx, fname);
 	if (ret != NDX_OK) {
 		NDX_SET_ERR(ret);
 		return ret;
 	}
-	if (mod_load_try_reuse_existing(&tx))
+	if (mod_load_try_reuse_existing(&tx)) {
+		_dbg("_mod_load: reuse_existing fired\n");
 		return NDX_OK;
+	}
 
 	ret = mod_load_alloc_entry(&tx, fname);
 	if (ret != NDX_OK)
@@ -73,10 +83,6 @@ int _mod_load(char *fname) {
 	if (ret != NDX_OK)
 		goto fail;
 
-	ret = mod_load_run_install(&tx);
-	if (ret != NDX_OK)
-		goto fail;
-
 	ndx_mod_count++;
 	{
 		typedef size_t ndx_region_state_size_t(void);
@@ -94,6 +100,11 @@ int _mod_load(char *fname) {
 			module_region_append(re, tx.mod_entry);
 	}
 	(void)fn_cache_prewarm(tx.mod_entry);
+
+	ret = mod_load_run_install(&tx);
+	if (ret != NDX_OK)
+		goto fail;
+
 	mod_load_restore_context(&tx);
 	module_lookup_result_free(&tx.lookup);
 	return NDX_OK;
