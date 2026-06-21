@@ -1,15 +1,15 @@
 #include <assert.h>
 #include <stdio.h>
-#include <ttypt/ndx.h>
+#include <ttypt/xy.h>
 
-NDX_HOOK_DEF(int, add_value, int, x);
+XY_HOOK_DEF(int, add_value, int, x);
 
 static void test_multi_call_runs_all_modules(void) {
-    int ret = ndx_load("./tests/mods/mod_adder");
-    assert(ret == NDX_OK);
+    int ret = xy_load("./tests/mods/mod_adder");
+    assert(ret == XY_OK);
     
-    ret = ndx_load("./tests/mods/mod_multiplier");
-    assert(ret == NDX_OK);
+    ret = xy_load("./tests/mods/mod_multiplier");
+    assert(ret == XY_OK);
     
     int result = add_value(5);
     

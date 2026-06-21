@@ -1,16 +1,16 @@
-#include "libndx-internal.h"
+#include "libxylem-internal.h"
 
 enum opts {
 	OPT_DETACH = 1,
 };
 
-ndx_t ndx;
-ndx_runtime_t ndx_rt = {
+xy_t xy;
+xy_runtime_t xy_rt = {
 	.mod_key_type_id = QM_MISS,
 };
 
 #ifdef _WIN32
-DWORD ndx_err_tls = TLS_OUT_OF_INDEXES;
+DWORD xy_err_tls = TLS_OUT_OF_INDEXES;
 
 static char err_buf[256];
 const char *
@@ -27,56 +27,56 @@ _win_dlerror(void)
 	return err_buf;
 }
 #else
-int ndx_err_val;
+int xy_err_val;
 #endif
 
-/* T1.5: Per-call mutable state extracted from ndx_last_adapter to
- * avoid the 88-byte memcpy on fast path. ndx_last() reads these instead
+/* T1.5: Per-call mutable state extracted from xy_last_adapter to
+ * avoid the 88-byte memcpy on fast path. xy_last() reads these instead
  * of the full struct. */
-__thread unsigned ndx_last_ran;
-__thread char     ndx_last_retbuf[NDX_MAX_RET_SIZE];
-__thread void    *ndx_last_retp;
+__thread unsigned xy_last_ran;
+__thread char     xy_last_retbuf[XY_MAX_RET_SIZE];
+__thread void    *xy_last_retp;
 
 /* Thread-local current region — id and a direct pointer kept in sync.
- * ndx_current_region_entry may be NULL before the first runtime init;
+ * xy_current_region_entry may be NULL before the first runtime init;
  * code that needs the entry must guard or call region_ensure_root() first. */
-__thread uint64_t           ndx_current_region_id = NDX_REGION_ROOT;
-__thread ndx_region_entry_t *ndx_current_region_entry = NULL;
+__thread uint64_t           xy_current_region_id = XY_REGION_ROOT;
+__thread xy_region_entry_t *xy_current_region_entry = NULL;
 
 /* Thread-local pointer to the currently-loading module entry.
- * Set during ndx_install() so child ndx_load() calls can register their
+ * Set during xy_install() so child xy_load() calls can register their
  * parent_entry for cascade-unload tracking. */
-__thread ndx_mod_entry_t *ndx_loading_mod = NULL;
+__thread xy_mod_entry_t *xy_loading_mod = NULL;
 
-/* Thread-local NDX context pointer self-registered by a Rust module's
- * .init_array constructor (via ndx_self_init_ctx).  The constructor runs
- * inside dlopen(), before mod_load_bind_ndx executes.  mod_load_bind_ndx
- * reads this as a fallback when get_ndx_ptr is absent or unreachable, then
+/* Thread-local xy context pointer self-registered by a Rust module's
+ * .init_array constructor (via xy_self_init_ctx).  The constructor runs
+ * inside dlopen(), before mod_load_bind_xy executes.  mod_load_bind_xy
+ * reads this as a fallback when get_xy_ptr is absent or unreachable, then
  * clears it.  One pointer per thread is sufficient because dlopen is
  * synchronous and modules are loaded one at a time per thread. */
-__thread ndx_t *ndx_pending_ctx = NULL;
+__thread xy_t *xy_pending_ctx = NULL;
 
 void
-ndx_self_init_ctx(struct ndx_ctx *ctx)
+xy_self_init_ctx(struct xy_ctx *ctx)
 {
-	ndx_pending_ctx = (ndx_t *)ctx;
+	xy_pending_ctx = (xy_t *)ctx;
 }
 /* Keep the id/pointer pair in sync atomically (within a thread). */
 void
-set_current_region(uint64_t id, ndx_region_entry_t *entry)
+set_current_region(uint64_t id, xy_region_entry_t *entry)
 {
-	ndx_current_region_id = id;
-	ndx_current_region_entry = entry;
+	xy_current_region_id = id;
+	xy_current_region_entry = entry;
 }
 
 /* -------------------------------------------------------------------------
  * Region ID helpers
  *
  * Region IDs are plain opaque uint64_t prefix values — all 64 bits are
- * the address.  The prefix length (plen) lives in ndx_region_entry_t, not
+ * the address.  The prefix length (plen) lives in xy_region_entry_t, not
  * in the ID itself.
  *
- * NDX_REGION_ROOT = 0: plen=0 in its entry, matches everything.
+ * XY_REGION_ROOT = 0: plen=0 in its entry, matches everything.
  * ------------------------------------------------------------------------- */
 
 /* -------------------------------------------------------------------------
@@ -113,25 +113,25 @@ module_lookup_symbol_fn(void *handle, const char *symbol, void *fn_out, size_t f
 }
 
 void
-ndx_zero_ret(void *retp, const ndx_adapter_t *reg)
+xy_zero_ret(void *retp, const xy_adapter_t *reg)
 {
 	if (retp && reg)
 		memset(retp, 0, reg->ret_size);
 }
 
 void
-ndx_set_last_ret(const void *retp, size_t ret_size)
+xy_set_last_ret(const void *retp, size_t ret_size)
 {
 	if (retp && ret_size > 0) {
-		memcpy(ndx_last_retbuf, retp, ret_size);
-		ndx_last_retp = ndx_last_retbuf;
+		memcpy(xy_last_retbuf, retp, ret_size);
+		xy_last_retp = xy_last_retbuf;
 	} else {
-		ndx_last_retp = NULL;
+		xy_last_retp = NULL;
 	}
 }
 
 int
-module_ensure_hook_impl_words(ndx_mod_entry_t *me, int hook_id)
+module_ensure_hook_impl_words(xy_mod_entry_t *me, int hook_id)
 {
 	if (!me || hook_id < 0)
 		return -1;
@@ -150,7 +150,7 @@ module_ensure_hook_impl_words(ndx_mod_entry_t *me, int hook_id)
 }
 
 void
-module_mark_hook_implemented(ndx_mod_entry_t *me, int hook_id)
+module_mark_hook_implemented(xy_mod_entry_t *me, int hook_id)
 {
 	if (!me || hook_id < 0)
 		return;
@@ -160,7 +160,7 @@ module_mark_hook_implemented(ndx_mod_entry_t *me, int hook_id)
 }
 
 int
-module_has_hook_implemented(const ndx_mod_entry_t *me, int hook_id)
+module_has_hook_implemented(const xy_mod_entry_t *me, int hook_id)
 {
 	if (!me || hook_id < 0)
 		return 0;
@@ -171,7 +171,7 @@ module_has_hook_implemented(const ndx_mod_entry_t *me, int hook_id)
 }
 
 int
-module_ensure_fn_cache_cap(ndx_mod_entry_t *me, int needed)
+module_ensure_fn_cache_cap(xy_mod_entry_t *me, int needed)
 {
 	if (!me || needed <= me->fn_cache_cap)
 		return 0;
@@ -185,11 +185,11 @@ module_ensure_fn_cache_cap(ndx_mod_entry_t *me, int needed)
 	return 0;
 }
 
-/* Look up an ndx_region_entry_t by id.  Returns NULL if not found. */
-ndx_region_entry_t *
+/* Look up an xy_region_entry_t by id.  Returns NULL if not found. */
+xy_region_entry_t *
 region_lookup(uint64_t id)
 {
-	return (ndx_region_entry_t *)qmap_ptr(qmap_get(region_hd, &id));
+	return (xy_region_entry_t *)qmap_ptr(qmap_get(region_hd, &id));
 }
 
 const char *
@@ -198,7 +198,7 @@ module_path_intern(char *path)
 	if (!path)
 		return NULL;
 	if (!path_intern_hd)
-		path_intern_hd = qmap_open(NULL, NULL, QM_STR, ndx_ptr_type, MOD_MASK, 0);
+		path_intern_hd = qmap_open(NULL, NULL, QM_STR, xy_ptr_type, MOD_MASK, 0);
 	if (!path_intern_hd) {
 		free(path);
 		return NULL;
@@ -235,18 +235,18 @@ path_intern_free_all(void)
  * Returns number of entries filled.
  */
 int
-region_ancestor_chain(ndx_region_entry_t *start,
-                      ndx_region_entry_t **chain, int chain_cap)
+region_ancestor_chain(xy_region_entry_t *start,
+                      xy_region_entry_t **chain, int chain_cap)
 {
 	int n = 0;
-	ndx_region_entry_t *e = start;
+	xy_region_entry_t *e = start;
 	while (e && n < chain_cap) {
 		chain[n++] = e;
 		e = e->parent;
 	}
 	/* Reverse so root (parent==NULL) is first */
 	for (int a = 0, b = n - 1; a < b; a++, b--) {
-		ndx_region_entry_t *tmp = chain[a];
+		xy_region_entry_t *tmp = chain[a];
 		chain[a] = chain[b];
 		chain[b] = tmp;
 	}
@@ -255,27 +255,27 @@ region_ancestor_chain(ndx_region_entry_t *start,
 
 /* Propagate a subtree flag upward from entry to root. */
 void
-region_propagate_deny(ndx_region_entry_t *entry)
+region_propagate_deny(xy_region_entry_t *entry)
 {
-	for (ndx_region_entry_t *e = entry; e; e = e->parent)
-		e->subtree_flags |= NDX_SUBTREE_HAS_DENY;
+	for (xy_region_entry_t *e = entry; e; e = e->parent)
+		e->subtree_flags |= XY_SUBTREE_HAS_DENY;
 }
 
 static void
-deny_list_free(ndx_deny_entry_t *head)
+deny_list_free(xy_deny_entry_t *head)
 {
 	while (head) {
-		ndx_deny_entry_t *next = head->next;
+		xy_deny_entry_t *next = head->next;
 		free(head);
 		head = next;
 	}
 }
 
 static void
-deny_list_free_owned(ndx_deny_entry_t *head)
+deny_list_free_owned(xy_deny_entry_t *head)
 {
 	while (head) {
-		ndx_deny_entry_t *next = head->next;
+		xy_deny_entry_t *next = head->next;
 		free(head->value);
 		free(head);
 		head = next;
@@ -283,7 +283,7 @@ deny_list_free_owned(ndx_deny_entry_t *head)
 }
 
 void
-region_entry_free(ndx_region_entry_t *e)
+region_entry_free(xy_region_entry_t *e)
 {
 	if (!e) return;
 	deny_list_free_owned(e->denied_hooks);
@@ -300,9 +300,9 @@ region_entry_free(ndx_region_entry_t *e)
 }
 
 void
-region_dispatch_gen_bump(ndx_region_entry_t *entry)
+region_dispatch_gen_bump(xy_region_entry_t *entry)
 {
-	for (ndx_region_entry_t *e = entry; e; e = e->parent) {
+	for (xy_region_entry_t *e = entry; e; e = e->parent) {
 		e->dispatch_gen++;
 		if (unlikely(e->dispatch_gen == 0))
 			e->dispatch_gen = 1;
@@ -314,19 +314,19 @@ region_dispatch_gen_bump(ndx_region_entry_t *entry)
  * removed from any region, or when a new child region is claimed. Also bumps
  * the per-region dispatch generation along the ancestor path. O(depth). */
 void
-region_mark_subtree_dirty(ndx_region_entry_t *entry)
+region_mark_subtree_dirty(xy_region_entry_t *entry)
 {
 	region_dispatch_gen_bump(entry);
-	for (ndx_region_entry_t *e = entry; e; e = e->parent)
+	for (xy_region_entry_t *e = entry; e; e = e->parent)
 		e->subtree_mods_dirty = 1;
 }
 
 static int
-region_subtree_mods_push(ndx_region_entry_t *root, ndx_mod_entry_t *me)
+region_subtree_mods_push(xy_region_entry_t *root, xy_mod_entry_t *me)
 {
 	if (root->subtree_mods_count >= root->subtree_mods_cap) {
 		int new_cap = root->subtree_mods_cap ? root->subtree_mods_cap * 2 : 8;
-		ndx_mod_entry_t **tmp = realloc(root->subtree_mods,
+		xy_mod_entry_t **tmp = realloc(root->subtree_mods,
 		                                (size_t)new_cap * sizeof(*tmp));
 		if (unlikely(!tmp))
 			return -1;
@@ -339,14 +339,14 @@ region_subtree_mods_push(ndx_region_entry_t *root, ndx_mod_entry_t *me)
 }
 
 static int
-region_collect_subtree_mods(ndx_region_entry_t *root, ndx_region_entry_t *node)
+region_collect_subtree_mods(xy_region_entry_t *root, xy_region_entry_t *node)
 {
-	for (ndx_mod_entry_t *me = node->mods_head; me; me = me->region_next) {
+	for (xy_mod_entry_t *me = node->mods_head; me; me = me->region_next) {
 		if (region_subtree_mods_push(root, me) < 0)
 			return -1;
 	}
 
-	for (ndx_region_entry_t *child = node->children_head;
+	for (xy_region_entry_t *child = node->children_head;
 	     child; child = child->sibling_next) {
 		if (region_collect_subtree_mods(root, child) < 0)
 			return -1;
@@ -359,7 +359,7 @@ region_collect_subtree_mods(ndx_region_entry_t *root, ndx_region_entry_t *node)
  * then each child's subtree recursively). Returns 0 on success, -1 on
  * allocation failure. */
 int
-region_rebuild_subtree_mods(ndx_region_entry_t *root)
+region_rebuild_subtree_mods(xy_region_entry_t *root)
 {
 	if (!root)
 		return 0;
@@ -375,10 +375,10 @@ region_rebuild_subtree_mods(ndx_region_entry_t *root)
 void
 region_ensure_root(void)
 {
-	ndx_region_entry_t *root = region_lookup(NDX_REGION_ROOT);
+	xy_region_entry_t *root = region_lookup(XY_REGION_ROOT);
 	if (!root) {
 		root = calloc(1, sizeof(*root));
-		root->id         = NDX_REGION_ROOT;
+		root->id         = XY_REGION_ROOT;
 		root->depth      = 0;
 		root->child_bits = 0;
 		root->plen       = 0;
@@ -388,15 +388,15 @@ region_ensure_root(void)
 		qmap_put(region_hd, &root->id, &root);
 	}
 	/* Always sync the thread-local pointer to the current root entry */
-	if (!ndx_current_region_entry || ndx_current_region_id == NDX_REGION_ROOT)
-		ndx_current_region_entry = root;
+	if (!xy_current_region_entry || xy_current_region_id == XY_REGION_ROOT)
+		xy_current_region_entry = root;
 }
 
 /* -------------------------------------------------------------------------
  * Module key helpers
  *
  * mod_hd is keyed by "path\0<region_hex>" to allow same .so in multiple
- * regions (each gets its own ndx_mod_entry_t).
+ * regions (each gets its own xy_mod_entry_t).
  * ------------------------------------------------------------------------- */
 
 void
@@ -417,7 +417,7 @@ mod_key_len(const char *path)
 
 /*
  * Resolve the actual shared-library path used for identity and dlopen.
- * We keep module_path in ndx_t as the caller's original fname, but module
+ * We keep module_path in xy_t as the caller's original fname, but module
  * identity is keyed by the resolved file so aliases like "../mods/song" and
  * "mods/song" collapse to the same entry.
  */
@@ -468,14 +468,14 @@ module_load_path(const char *fname)
 #endif
 }
 
-static void module_rekey_region_index(ndx_mod_entry_t *me, uint64_t parent_id,
+static void module_rekey_region_index(xy_mod_entry_t *me, uint64_t parent_id,
                                       uint64_t child_id);
-static void module_rekey_loaded_entry(ndx_mod_entry_t *me, const char *old_key,
+static void module_rekey_loaded_entry(xy_mod_entry_t *me, const char *old_key,
                                       const char *load_path, uint64_t parent_id,
                                       uint64_t child_id);
 
 void
-module_lookup_result_free(ndx_lookup_result_t *lookup)
+module_lookup_result_free(xy_lookup_result_t *lookup)
 {
 	if (!lookup)
 		return;
@@ -485,13 +485,13 @@ module_lookup_result_free(ndx_lookup_result_t *lookup)
 	lookup->load_path = NULL;
 }
 
-ndx_lookup_result_t
+xy_lookup_result_t
 module_lookup_from_fname(const char *fname, uint64_t region_id)
 {
-	ndx_lookup_result_t out = {0};
+	xy_lookup_result_t out = {0};
 	out.load_path = module_load_path(fname);
 	if (!out.load_path) {
-		out.err = NDX_ERR_INVALID;
+		out.err = XY_ERR_INVALID;
 		return out;
 	}
 	size_t key_len = mod_key_len(out.load_path);
@@ -499,12 +499,12 @@ module_lookup_from_fname(const char *fname, uint64_t region_id)
 	if (!out.key) {
 		free(out.load_path);
 		out.load_path = NULL;
-		out.err = NDX_ERR_INVALID;
+		out.err = XY_ERR_INVALID;
 		return out;
 	}
 	mod_key(out.key, key_len, out.load_path, region_id);
 	out.entry = qmap_ptr(qmap_get(mod_hd, out.key));
-	out.err = NDX_OK;
+	out.err = XY_OK;
 	return out;
 }
 
@@ -512,7 +512,7 @@ void
 module_rekey_for_claim(const char *caller, uint64_t parent_id,
                        uint64_t child_id)
 {
-	ndx_lookup_result_t lookup = module_lookup_from_fname(caller, parent_id);
+	xy_lookup_result_t lookup = module_lookup_from_fname(caller, parent_id);
 	if (!lookup.load_path)
 		return;
 
@@ -523,19 +523,19 @@ module_rekey_for_claim(const char *caller, uint64_t parent_id,
 }
 
 static void
-module_rekey_region_index(ndx_mod_entry_t *me, uint64_t parent_id,
+module_rekey_region_index(xy_mod_entry_t *me, uint64_t parent_id,
                           uint64_t child_id)
 {
 	/* mod_by_region_hd is QM_MULTIVALUE; collect all entries for parent_id,
 	 * delete them all, re-insert all except me under parent_id, then insert
 	 * me under child_id. */
 #define MOD_BY_REGION_MAX 512
-	ndx_mod_entry_t *others[MOD_BY_REGION_MAX];
+	xy_mod_entry_t *others[MOD_BY_REGION_MAX];
 	int nothers = 0;
 	uint32_t cur = qmap_iter(mod_by_region_hd, &parent_id, 0);
 	const void *ck, *cv;
 	while (qmap_next(&ck, &cv, cur)) {
-		ndx_mod_entry_t *e = qmap_ptr(cv);
+		xy_mod_entry_t *e = qmap_ptr(cv);
 		if (e && e != me && nothers < MOD_BY_REGION_MAX)
 			others[nothers++] = e;
 	}
@@ -547,7 +547,7 @@ module_rekey_region_index(ndx_mod_entry_t *me, uint64_t parent_id,
 }
 
 static void
-module_rekey_loaded_entry(ndx_mod_entry_t *me, const char *old_key,
+module_rekey_loaded_entry(xy_mod_entry_t *me, const char *old_key,
                           const char *load_path, uint64_t parent_id,
                           uint64_t child_id)
 {
@@ -566,8 +566,8 @@ module_rekey_loaded_entry(ndx_mod_entry_t *me, const char *old_key,
 	memcpy(me->mod_key, new_key, new_key_len);
 	free(new_key);
 	module_rekey_region_index(me, parent_id, child_id);
-	if (me->indx)
-		me->indx->region_id = child_id;
+	if (me->ctx)
+		me->ctx->region_id = child_id;
 }
 
 static void *
@@ -596,21 +596,21 @@ module_handle_base(void *handle)
 #ifdef _WIN32
 	return handle;
 #else
-	void *any_sym = module_lookup_symbol_raw(handle, "ndx_install");
-	if (!any_sym) any_sym = module_lookup_symbol_raw(handle, "get_ndx_ptr");
+	void *any_sym = module_lookup_symbol_raw(handle, "xy_install");
+	if (!any_sym) any_sym = module_lookup_symbol_raw(handle, "get_xy_ptr");
 	return module_base_from_symbol(any_sym);
 #endif
 }
 
 void
-module_remove_denies(ndx_region_entry_t *re, const char *path)
+module_remove_denies(xy_region_entry_t *re, const char *path)
 {
 	if (!re || !path)
 		return;
-	ndx_deny_entry_t **pp = &re->denied_modules;
+	xy_deny_entry_t **pp = &re->denied_modules;
 	while (*pp) {
 		if ((*pp)->value == path) {
-			ndx_deny_entry_t *dead = *pp;
+			xy_deny_entry_t *dead = *pp;
 			*pp = dead->next;
 			if (re->denied_modules_set)
 				qmap_del(re->denied_modules_set, &dead->value);
@@ -622,13 +622,13 @@ module_remove_denies(ndx_region_entry_t *re, const char *path)
 }
 
 int
-module_is_denied(ndx_region_entry_t *re, const char *path)
+module_is_denied(xy_region_entry_t *re, const char *path)
 {
 	if (!re || !path)
 		return 0;
 	if (re->denied_modules_set && qmap_get(re->denied_modules_set, &path))
 		return 1;
-	for (ndx_deny_entry_t *d = re->denied_modules; d; d = d->next) {
+	for (xy_deny_entry_t *d = re->denied_modules; d; d = d->next) {
 		if (d->value == path)
 			return 1;
 	}
@@ -636,9 +636,9 @@ module_is_denied(ndx_region_entry_t *re, const char *path)
 }
 
 void
-module_region_detach(ndx_mod_entry_t *entry)
+module_region_detach(xy_mod_entry_t *entry)
 {
-	ndx_region_entry_t *re = entry ? entry->region_entry : NULL;
+	xy_region_entry_t *re = entry ? entry->region_entry : NULL;
 	if (!re)
 		return;
 
@@ -658,8 +658,8 @@ module_region_detach(ndx_mod_entry_t *entry)
 }
 
 void
-module_region_insert_after(ndx_region_entry_t *re, ndx_mod_entry_t *entry,
-                           ndx_mod_entry_t *after)
+module_region_insert_after(xy_region_entry_t *re, xy_mod_entry_t *entry,
+                           xy_mod_entry_t *after)
 {
 	if (!re || !entry)
 		return;
@@ -686,13 +686,13 @@ module_region_insert_after(ndx_region_entry_t *re, ndx_mod_entry_t *entry,
 }
 
 void
-module_region_append(ndx_region_entry_t *re, ndx_mod_entry_t *entry)
+module_region_append(xy_region_entry_t *re, xy_mod_entry_t *entry)
 {
 	module_region_insert_after(re, entry, re ? re->mods_tail : NULL);
 }
 
 void
-module_clear_fn_cache_for_handle(ndx_mod_entry_t *entry)
+module_clear_fn_cache_for_handle(xy_mod_entry_t *entry)
 {
 	if (!entry || !entry->handle)
 		return;
@@ -703,11 +703,11 @@ module_clear_fn_cache_for_handle(ndx_mod_entry_t *entry)
 	unsigned c = qmap_iter(mod_hd, NULL, 0);
 	const void *key, *value;
 	while (qmap_next(&key, &value, c)) {
-		ndx_mod_entry_t *m = qmap_ptr(value);
+		xy_mod_entry_t *m = qmap_ptr(value);
 		if (!m || m == entry) continue;
 		for (int i = 0; i < m->fn_cache_cap; i++) {
 			void *fp = m->fn_cache[i];
-			if (!fp || fp == NDX_FN_NOT_FOUND) continue;
+			if (!fp || fp == XY_FN_NOT_FOUND) continue;
 			if (module_base_from_symbol(fp) == base)
 				m->fn_cache[i] = NULL; /* force re-resolve */
 		}
@@ -715,14 +715,14 @@ module_clear_fn_cache_for_handle(ndx_mod_entry_t *entry)
 }
 
 static void
-module_cleanup_region_state(ndx_mod_entry_t *entry)
+module_cleanup_region_state(xy_mod_entry_t *entry)
 {
 	if (!entry || !entry->region_state)
 		return;
 
-	typedef void ndx_region_cleanup_t(void *state);
-	ndx_region_cleanup_t *cleanup_fn = NULL;
-	module_lookup_symbol_fn(entry->handle, "ndx_region_cleanup",
+	typedef void xy_region_cleanup_t(void *state);
+	xy_region_cleanup_t *cleanup_fn = NULL;
+	module_lookup_symbol_fn(entry->handle, "xy_region_cleanup",
 	                        &cleanup_fn, sizeof(cleanup_fn));
 	if (cleanup_fn)
 		cleanup_fn(entry->region_state);
@@ -731,7 +731,7 @@ module_cleanup_region_state(ndx_mod_entry_t *entry)
 }
 
 void
-module_free_entry(ndx_mod_entry_t *entry, int close_handle)
+module_free_entry(xy_mod_entry_t *entry, int close_handle)
 {
 	void *handle;
 
@@ -750,7 +750,7 @@ module_free_entry(ndx_mod_entry_t *entry, int close_handle)
 }
 
 void
-mod_load_restore_context(ndx_load_txn_t *tx)
+mod_load_restore_context(xy_load_txn_t *tx)
 {
 	if (!tx || !tx->context_active)
 		return;
@@ -759,7 +759,7 @@ mod_load_restore_context(ndx_load_txn_t *tx)
 }
 
 int
-mod_load_abort(ndx_load_txn_t *tx, int err)
+mod_load_abort(xy_load_txn_t *tx, int err)
 {
 	if (!tx)
 		return err;
@@ -768,7 +768,7 @@ mod_load_abort(ndx_load_txn_t *tx, int err)
 	if (tx->mod_entry) {
 		module_cleanup_region_state(tx->mod_entry);
 		if (tx->mod_entry->region_entry) {
-			ndx_region_entry_t *rre = tx->mod_entry->region_entry;
+			xy_region_entry_t *rre = tx->mod_entry->region_entry;
 			if (tx->mod_entry->region_prev)
 				tx->mod_entry->region_prev->region_next = tx->mod_entry->region_next;
 			else
@@ -802,28 +802,28 @@ mod_load_abort(ndx_load_txn_t *tx, int err)
 }
 
 int
-mod_load_open_handle(ndx_load_txn_t *tx, char *fname)
+mod_load_open_handle(xy_load_txn_t *tx, char *fname)
 {
 	tx->lookup = module_lookup_from_fname(fname, tx->inherited_region_id);
-	if (tx->lookup.err != NDX_OK)
+	if (tx->lookup.err != XY_OK)
 		return tx->lookup.err;
 	if (!tx->lookup.load_path)
-		return NDX_ERR_INVALID;
+		return XY_ERR_INVALID;
 
 	tx->handle = dlopen(tx->lookup.load_path, RTLD_NOW | RTLD_LOCAL | RTLD_NODELETE);
 	if (!tx->handle) {
 		WARN("_mod_load failed loading '%s': %s\n", fname, dlerror());
 		module_lookup_result_free(&tx->lookup);
-		return NDX_ERR_NOTFOUND;
+		return XY_ERR_NOTFOUND;
 	}
 
-	return NDX_OK;
+	return XY_OK;
 }
 
 int
-mod_load_try_reuse_existing(ndx_load_txn_t *tx)
+mod_load_try_reuse_existing(xy_load_txn_t *tx)
 {
-	ndx_mod_entry_t *existing = tx->lookup.entry;
+	xy_mod_entry_t *existing = tx->lookup.entry;
 	if (!existing)
 		return 0;
 
@@ -835,163 +835,163 @@ mod_load_try_reuse_existing(ndx_load_txn_t *tx)
 }
 
 int
-mod_load_alloc_entry(ndx_load_txn_t *tx, char *fname)
+mod_load_alloc_entry(xy_load_txn_t *tx, char *fname)
 {
 	tx->stable_fname = strdup(fname);
 	if (!tx->stable_fname || !tx->lookup.key)
-		return NDX_ERR_INVALID;
+		return XY_ERR_INVALID;
 	tx->stable_key = tx->lookup.key;
 	tx->lookup.key = NULL;
 
 	tx->interned_load_path = module_path_intern(tx->lookup.load_path);
 	tx->lookup.load_path = NULL;
 	if (!tx->interned_load_path)
-		return NDX_ERR_INVALID;
+		return XY_ERR_INVALID;
 
 	tx->mod_entry = calloc(1, sizeof(*tx->mod_entry));
 	if (!tx->mod_entry)
-		return NDX_ERR_INVALID;
+		return XY_ERR_INVALID;
 
 	tx->mod_entry->handle       = tx->handle;
 	tx->mod_entry->region_id    = tx->inherited_region_id;
 	tx->mod_entry->refcount     = 1;
-	tx->mod_entry->parent_entry = ndx_loading_mod;
+	tx->mod_entry->parent_entry = xy_loading_mod;
 	tx->mod_entry->mod_key      = tx->stable_key;
 	tx->mod_entry->load_path    = tx->interned_load_path;
 
-	return NDX_OK;
+	return XY_OK;
 }
 
 int
-mod_load_publish_entry(ndx_load_txn_t *tx)
+mod_load_publish_entry(xy_load_txn_t *tx)
 {
 	qmap_put(mod_hd, tx->stable_key, &tx->mod_entry);
 	qmap_put(mod_by_region_hd, &tx->mod_entry->region_id, &tx->mod_entry);
 	tx->published_entry = 1;
-	return NDX_OK;
+	return XY_OK;
 }
 
 int
-mod_load_bind_ndx(ndx_load_txn_t *tx)
+mod_load_bind_xy(xy_load_txn_t *tx)
 {
-	get_ndx_func_t get_ndx = NULL;
-	ndx_t *indx = NULL;
+	get_xy_func_t get_xy = NULL;
+	xy_t *ctx = NULL;
 
-	module_lookup_symbol_fn(tx->handle, "get_ndx_ptr", &get_ndx, sizeof(get_ndx));
+	module_lookup_symbol_fn(tx->handle, "get_xy_ptr", &get_xy, sizeof(get_xy));
 	{
-		FILE *dbg = fopen("/tmp/ndx_bind.log", "a");
-		if (!dbg) dbg = fopen("tmp/ndx_bind.log", "a");
+		FILE *dbg = fopen("/tmp/xy_bind.log", "a");
+		if (!dbg) dbg = fopen("tmp/xy_bind.log", "a");
 		if (dbg) {
-			fprintf(dbg, "mod_load_bind_ndx: fname=%s get_ndx=%p\n",
-				tx->stable_fname, (void *)get_ndx);
+			fprintf(dbg, "mod_load_bind_xy: fname=%s get_xy=%p\n",
+				tx->stable_fname, (void *)get_xy);
 			fclose(dbg);
 		}
 	}
-	if (get_ndx) {
-		indx = get_ndx();
+	if (get_xy) {
+		ctx = get_xy();
 		{
-			FILE *dbg = fopen("/tmp/ndx_bind.log", "a");
-			if (!dbg) dbg = fopen("tmp/ndx_bind.log", "a");
+			FILE *dbg = fopen("/tmp/xy_bind.log", "a");
+			if (!dbg) dbg = fopen("tmp/xy_bind.log", "a");
 			if (dbg) {
-				fprintf(dbg, "mod_load_bind_ndx: get_ndx() => %p\n",
-					(void *)indx);
+				fprintf(dbg, "mod_load_bind_xy: get_xy() => %p\n",
+					(void *)ctx);
 				fclose(dbg);
 			}
 		}
 	}
 
-	/* Fallback: Rust cdylibs call ndx_self_init_ctx() from a .init_array
-	 * constructor (inside dlopen) to push their NDX pointer to us before
-	 * mod_load_bind_ndx runs. Use that when get_ndx_ptr lookup fails. */
-	if (!indx && ndx_pending_ctx) {
-		FILE *dbg = fopen("/tmp/ndx_bind.log", "a");
-		if (!dbg) dbg = fopen("tmp/ndx_bind.log", "a");
+	/* Fallback: Rust cdylibs call xy_self_init_ctx() from a .init_array
+	 * constructor (inside dlopen) to push their xy pointer to us before
+	 * mod_load_bind_xy runs. Use that when get_xy_ptr lookup fails. */
+	if (!ctx && xy_pending_ctx) {
+		FILE *dbg = fopen("/tmp/xy_bind.log", "a");
+		if (!dbg) dbg = fopen("tmp/xy_bind.log", "a");
 		if (dbg) {
-			fprintf(dbg, "mod_load_bind_ndx: using ndx_pending_ctx=%p\n",
-				(void *)ndx_pending_ctx);
+			fprintf(dbg, "mod_load_bind_xy: using xy_pending_ctx=%p\n",
+				(void *)xy_pending_ctx);
 			fclose(dbg);
 		}
-		indx = ndx_pending_ctx;
+		ctx = xy_pending_ctx;
 	}
 
-	ndx_pending_ctx = NULL;
+	xy_pending_ctx = NULL;
 
-	if (!indx) {
-		FILE *dbg = fopen("/tmp/ndx_bind.log", "a");
-		if (!dbg) dbg = fopen("tmp/ndx_bind.log", "a");
+	if (!ctx) {
+		FILE *dbg = fopen("/tmp/xy_bind.log", "a");
+		if (!dbg) dbg = fopen("tmp/xy_bind.log", "a");
 		if (dbg) {
-			fprintf(dbg, "mod_load_bind_ndx: no NDX for %s\n",
+			fprintf(dbg, "mod_load_bind_xy: no xy for %s\n",
 				tx->stable_fname);
 			fclose(dbg);
 		}
-		return NDX_OK;
+		return XY_OK;
 	}
 
 	{
-		FILE *dbg = fopen("/tmp/ndx_bind.log", "a");
-		if (!dbg) dbg = fopen("tmp/ndx_bind.log", "a");
+		FILE *dbg = fopen("/tmp/xy_bind.log", "a");
+		if (!dbg) dbg = fopen("tmp/xy_bind.log", "a");
 		if (dbg) {
 			fprintf(dbg,
-				"mod_load_bind_ndx: calling _ndx_init on %p for %s\n",
-				(void *)indx, tx->stable_fname);
+				"mod_load_bind_xy: calling _xy_init on %p for %s\n",
+				(void *)ctx, tx->stable_fname);
 			fclose(dbg);
 		}
 	}
-	_ndx_init(indx, tx->stable_fname, tx->inherited_region_id);
+	_xy_init(ctx, tx->stable_fname, tx->inherited_region_id);
 	{
-		FILE *dbg = fopen("/tmp/ndx_bind.log", "a");
-		if (!dbg) dbg = fopen("tmp/ndx_bind.log", "a");
+		FILE *dbg = fopen("/tmp/xy_bind.log", "a");
+		if (!dbg) dbg = fopen("tmp/xy_bind.log", "a");
 		if (dbg) {
-			fprintf(dbg, "mod_load_bind_ndx: NDX.call=%p for %s\n",
-				(void *)indx->call, tx->stable_fname);
+			fprintf(dbg, "mod_load_bind_xy: xy.call=%p for %s\n",
+				(void *)ctx->call, tx->stable_fname);
 			fclose(dbg);
 		}
 	}
-	tx->mod_entry->indx = indx;
-	return NDX_OK;
+	tx->mod_entry->ctx = ctx;
+	return XY_OK;
 }
 
 int
-mod_load_enter_context(ndx_load_txn_t *tx)
+mod_load_enter_context(xy_load_txn_t *tx)
 {
 	tx->inherited_reg = region_lookup(tx->inherited_region_id);
-	tx->prev_region_id = ndx_current_region_id;
-	tx->prev_region_entry = ndx_current_region_entry;
+	tx->prev_region_id = xy_current_region_id;
+	tx->prev_region_entry = xy_current_region_entry;
 	set_current_region(tx->inherited_region_id, tx->inherited_reg);
 	tx->context_active = 1;
-	return NDX_OK;
+	return XY_OK;
 }
 
 int
-mod_load_claim_if_needed(ndx_load_txn_t *tx)
+mod_load_claim_if_needed(xy_load_txn_t *tx)
 {
-	uint8_t *claim_sym = module_lookup_symbol_raw(tx->handle, "ndx_claim");
+	uint8_t *claim_sym = module_lookup_symbol_raw(tx->handle, "xy_claim");
 	if (tx->inherited_reg && tx->inherited_reg->require_claim && !claim_sym)
-		return NDX_ERR_EPERM;
+		return XY_ERR_EPERM;
 
 	if (!claim_sym || !tx->inherited_reg)
-		return NDX_OK;
+		return XY_OK;
 	if (!tx->inherited_reg->claim_handler && !tx->inherited_reg->require_claim)
-		return NDX_OK;
+		return XY_OK;
 
-	return _ndx_claim_for_load(tx->stable_fname, tx->inherited_region_id,
+	return _xy_claim_for_load(tx->stable_fname, tx->inherited_region_id,
 	                           *claim_sym, tx->handle);
 }
 
 int
-mod_load_run_install(ndx_load_txn_t *tx)
+mod_load_run_install(xy_load_txn_t *tx)
 {
-	ndx_mod_entry_t *prev_loading_mod = ndx_loading_mod;
+	xy_mod_entry_t *prev_loading_mod = xy_loading_mod;
 	int ret;
 
-	ndx_loading_mod = tx->mod_entry;
-	ret = _mod_run(tx->handle, "ndx_install");
-	ndx_loading_mod = prev_loading_mod;
+	xy_loading_mod = tx->mod_entry;
+	ret = _mod_run(tx->handle, "xy_install");
+	xy_loading_mod = prev_loading_mod;
 	return ret;
 }
 
 void
-module_remove_path_owned_entries(ndx_region_entry_t *re, const char *path,
+module_remove_path_owned_entries(xy_region_entry_t *re, const char *path,
                                  void *handle UNUSED)
 {
 	if (!re || !path)
@@ -1021,36 +1021,36 @@ mod_key_measure(const void *data)
  * Public API: error
  * ------------------------------------------------------------------------- */
 
-int ndx_errno(void) {
-	return NDX_GET_ERR();
+int xy_errno(void) {
+	return XY_GET_ERR();
 }
 
-const char *ndx_strerror(int err) {
+const char *xy_strerror(int err) {
 	switch (err) {
-	case NDX_OK:           return "success";
-	case NDX_ERR_NOTFOUND: return "not found";
-	case NDX_ERR_INVALID:  return "invalid argument";
-	case NDX_ERR_TOOBIG:   return "return type too large";
-	case NDX_ERR_INIT:     return "initialization failed";
-	case NDX_ERR_EPERM:    return "operation not permitted";
+	case XY_OK:           return "success";
+	case XY_ERR_NOTFOUND: return "not found";
+	case XY_ERR_INVALID:  return "invalid argument";
+	case XY_ERR_TOOBIG:   return "return type too large";
+	case XY_ERR_INIT:     return "initialization failed";
+	case XY_ERR_EPERM:    return "operation not permitted";
 	default:               return "unknown error";
 	}
 }
 
 /* -------------------------------------------------------------------------
- * ndx_on_claim — register a claim handler on the caller's current region
+ * xy_on_claim — register a claim handler on the caller's current region
  * ------------------------------------------------------------------------- */
 
-int ndx_require_claim(ndx_claim_handler_fn_t *fn, void *ud) {
-	int enter_ret = ndx_runtime_ensure();
-	if (enter_ret != NDX_OK) {
-		NDX_SET_ERR(enter_ret);
+int xy_require_claim(xy_claim_handler_fn_t *fn, void *ud) {
+	int enter_ret = xy_runtime_ensure();
+	if (enter_ret != XY_OK) {
+		XY_SET_ERR(enter_ret);
 		return enter_ret;
 	}
-	ndx_region_entry_t *reg = region_lookup(ndx_current_region_id);
+	xy_region_entry_t *reg = region_lookup(xy_current_region_id);
 	if (!reg) {
-		NDX_SET_ERR(NDX_ERR_NOTFOUND);
-		return NDX_ERR_NOTFOUND;
+		XY_SET_ERR(XY_ERR_NOTFOUND);
+		return XY_ERR_NOTFOUND;
 	}
 	if (!fn) {
 		/* NULL handler clears the require-claim gate */
@@ -1062,26 +1062,26 @@ int ndx_require_claim(ndx_claim_handler_fn_t *fn, void *ud) {
 		reg->claim_handler_ud = ud;
 			reg->require_claim    = 1;
 		}
-	NDX_SET_ERR(NDX_OK);
-	return NDX_OK;
+	XY_SET_ERR(XY_OK);
+	return XY_OK;
 }
 
 /* -------------------------------------------------------------------------
- * ndx_claim — claim a child region under the caller's current region
+ * xy_claim — claim a child region under the caller's current region
  * ------------------------------------------------------------------------- */
 
 /*
  * Find the first free slot of 'bits' width under parent entry.
  * A slot is free if no existing region has the same plen and id value.
- * Returns the child ID (plain 64-bit prefix value), or NDX_REGION_INVALID.
+ * Returns the child ID (plain 64-bit prefix value), or XY_REGION_INVALID.
  */
 static uint64_t
-region_alloc_slot(const ndx_region_entry_t *parent, uint8_t bits)
+region_alloc_slot(const xy_region_entry_t *parent, uint8_t bits)
 {
 	uint8_t  cplen = parent->plen + bits;
 
 	if (cplen > 64)
-		return NDX_REGION_INVALID;
+		return XY_REGION_INVALID;
 
 	uint64_t num_slots = (cplen == 64) ? (uint64_t)0 /* wraps */ : (uint64_t)1 << bits;
 	/* When cplen==64, there is exactly 1 slot (the full 64-bit value);
@@ -1101,63 +1101,63 @@ region_alloc_slot(const ndx_region_entry_t *parent, uint8_t bits)
 		s++;
 	} while (s != num_slots);
 
-	return NDX_REGION_INVALID;
+	return XY_REGION_INVALID;
 }
 
 /* -------------------------------------------------------------------------
- * _ndx_claim_for_load — internal helper: perform a claim on behalf of a
+ * _xy_claim_for_load — internal helper: perform a claim on behalf of a
  * module being loaded.  Called from _mod_load when the module has an
- * ndx_claim data symbol and the parent region has require_claim set.
+ * xy_claim data symbol and the parent region has require_claim set.
  *
  * caller     — stable module path (stable_fname)
  * parent_id  — region the module is being loaded into
- * bits       — value read from the module's ndx_claim symbol
- * handle     — dlopen handle so we can update the live ndx_t
+ * bits       — value read from the module's xy_claim symbol
+ * handle     — dlopen handle so we can update the live xy_t
  * ------------------------------------------------------------------------- */
 int
-_ndx_claim_for_load(const char *caller, uint64_t parent_id,
+_xy_claim_for_load(const char *caller, uint64_t parent_id,
                     uint8_t bits, void *handle)
 {
 	(void)handle;
 	if (bits == 0 || bits > 64) {
-		NDX_SET_ERR(NDX_ERR_INVALID);
-		return NDX_ERR_INVALID;
+		XY_SET_ERR(XY_ERR_INVALID);
+		return XY_ERR_INVALID;
 	}
 
-	ndx_region_entry_t *parent = region_lookup(parent_id);
+	xy_region_entry_t *parent = region_lookup(parent_id);
 	if (!parent) {
-		NDX_SET_ERR(NDX_ERR_NOTFOUND);
-		return NDX_ERR_NOTFOUND;
+		XY_SET_ERR(XY_ERR_NOTFOUND);
+		return XY_ERR_NOTFOUND;
 	}
 
 	/* Invoke the parent's claim handler */
 	if (!parent->claim_handler) {
-		NDX_SET_ERR(NDX_ERR_EPERM);
-		return NDX_ERR_EPERM;
+		XY_SET_ERR(XY_ERR_EPERM);
+		return XY_ERR_EPERM;
 	}
 
 	uint8_t granted = 0;
 	int hret = parent->claim_handler(caller ? caller : "",
 	                                  bits, &granted,
 	                                  parent->claim_handler_ud);
-	if (hret != NDX_OK) {
-		NDX_SET_ERR(NDX_ERR_EPERM);
-		return NDX_ERR_EPERM;
+	if (hret != XY_OK) {
+		XY_SET_ERR(XY_ERR_EPERM);
+		return XY_ERR_EPERM;
 	}
 	if (granted == 0 || granted > 64) {
-		NDX_SET_ERR(NDX_ERR_EPERM);
-		return NDX_ERR_EPERM;
+		XY_SET_ERR(XY_ERR_EPERM);
+		return XY_ERR_EPERM;
 	}
 
 	/* Find a free slot */
 	uint64_t child_id = region_alloc_slot(parent, granted);
-	if (child_id == NDX_REGION_INVALID) {
-		NDX_SET_ERR(NDX_ERR_TOOBIG);
-		return NDX_ERR_TOOBIG;
+	if (child_id == XY_REGION_INVALID) {
+		XY_SET_ERR(XY_ERR_TOOBIG);
+		return XY_ERR_TOOBIG;
 	}
 
 	/* Create the child region entry */
-	ndx_region_entry_t *child = calloc(1, sizeof(*child));
+	xy_region_entry_t *child = calloc(1, sizeof(*child));
 	child->id         = child_id;
 	child->plen       = parent->plen + granted;
 	child->depth      = parent->depth + 1;
@@ -1168,11 +1168,11 @@ _ndx_claim_for_load(const char *caller, uint64_t parent_id,
 	qmap_put(region_hd, &child->id, &child);
 
 	/* Wire child into parent's children list */
-	child->sibling_next   = (ndx_region_entry_t *)parent->children_head;
+	child->sibling_next   = (xy_region_entry_t *)parent->children_head;
 	parent->children_head = child;
 	region_mark_subtree_dirty(parent);
 
-	/* Update the thread-local region context so ndx_install sees child */
+	/* Update the thread-local region context so xy_install sees child */
 	set_current_region(child_id, child);
 
 	/* Update the mod entry and re-key it under the new region */
@@ -1180,35 +1180,35 @@ _ndx_claim_for_load(const char *caller, uint64_t parent_id,
 		module_rekey_for_claim(caller, parent_id, child_id);
 	}
 
-	NDX_SET_ERR(NDX_OK);
-	return NDX_OK;
+	XY_SET_ERR(XY_OK);
+	return XY_OK;
 }
 
 /* -------------------------------------------------------------------------
  * Region deny API
  * ------------------------------------------------------------------------- */
 
-int ndx_deny(const char *what, ndx_deny_type_t type) {
-	int enter_ret = ndx_runtime_ensure();
-	if (enter_ret != NDX_OK) {
-		NDX_SET_ERR(enter_ret);
+int xy_deny(const char *what, xy_deny_type_t type) {
+	int enter_ret = xy_runtime_ensure();
+	if (enter_ret != XY_OK) {
+		XY_SET_ERR(enter_ret);
 		return enter_ret;
 	}
-	ndx_region_entry_t *reg = region_lookup(ndx_current_region_id);
+	xy_region_entry_t *reg = region_lookup(xy_current_region_id);
 	if (!reg) {
-		NDX_SET_ERR(NDX_ERR_NOTFOUND);
-		return NDX_ERR_NOTFOUND;
+		XY_SET_ERR(XY_ERR_NOTFOUND);
+		return XY_ERR_NOTFOUND;
 	}
 
-	ndx_deny_entry_t *node = malloc(sizeof(*node));
+	xy_deny_entry_t *node = malloc(sizeof(*node));
 	node->value = strdup(what);
 
-	if (type == NDX_DENY_HOOK) {
+	if (type == XY_DENY_HOOK) {
 		node->next = reg->denied_hooks;
 		reg->denied_hooks = node;
 		if (!reg->denied_hooks_set)
 			reg->denied_hooks_set = qmap_open(NULL, NULL, QM_STR,
-			                                  ndx_ptr_type, MOD_MASK, 0);
+			                                  xy_ptr_type, MOD_MASK, 0);
 		{
 			void *sentinel = (void *)(uintptr_t)1;
 			qmap_put(reg->denied_hooks_set, node->value, &sentinel);
@@ -1217,21 +1217,21 @@ int ndx_deny(const char *what, ndx_deny_type_t type) {
 			char *path = module_load_path(what);
 			if (!path) {
 				free(node);
-				NDX_SET_ERR(NDX_ERR_INVALID);
-				return NDX_ERR_INVALID;
+				XY_SET_ERR(XY_ERR_INVALID);
+				return XY_ERR_INVALID;
 			}
 			const char *interned = module_path_intern(path);
 			if (!interned) {
 				free(node);
-				NDX_SET_ERR(NDX_ERR_INVALID);
-				return NDX_ERR_INVALID;
+				XY_SET_ERR(XY_ERR_INVALID);
+				return XY_ERR_INVALID;
 			}
 		node->value = (char *)interned;
 		node->next = reg->denied_modules;
 		reg->denied_modules = node;
 		if (!reg->denied_modules_set)
-			reg->denied_modules_set = qmap_open(NULL, NULL, ndx_ptr_type,
-			                                    ndx_ptr_type, MOD_MASK, 0);
+			reg->denied_modules_set = qmap_open(NULL, NULL, xy_ptr_type,
+			                                    xy_ptr_type, MOD_MASK, 0);
 		{
 			void *sentinel = (void *)(uintptr_t)1;
 			qmap_put(reg->denied_modules_set, &node->value, &sentinel);
@@ -1240,76 +1240,76 @@ int ndx_deny(const char *what, ndx_deny_type_t type) {
 	region_propagate_deny(reg);
 	region_dispatch_gen_bump(reg);
 
-	NDX_SET_ERR(NDX_OK);
-	return NDX_OK;
+	XY_SET_ERR(XY_OK);
+	return XY_OK;
 }
 
 /* -------------------------------------------------------------------------
- * ndx_region_each — enumerate immediate children of caller's current region
+ * xy_region_each — enumerate immediate children of caller's current region
  * ------------------------------------------------------------------------- */
 
-int ndx_region_each(ndx_region_each_fn_t *fn, void *ud) {
-	int enter_ret = ndx_runtime_ensure();
-	if (enter_ret != NDX_OK) {
-		NDX_SET_ERR(enter_ret);
+int xy_region_each(xy_region_each_fn_t *fn, void *ud) {
+	int enter_ret = xy_runtime_ensure();
+	if (enter_ret != XY_OK) {
+		XY_SET_ERR(enter_ret);
 		return enter_ret;
 	}
-	uint64_t parent_id = ndx_current_region_id;
-	ndx_region_entry_t *parent = region_lookup(parent_id);
+	uint64_t parent_id = xy_current_region_id;
+	xy_region_entry_t *parent = region_lookup(parent_id);
 	if (!parent) {
-		NDX_SET_ERR(NDX_ERR_NOTFOUND);
-		return NDX_ERR_NOTFOUND;
+		XY_SET_ERR(XY_ERR_NOTFOUND);
+		return XY_ERR_NOTFOUND;
 	}
 
-	int ret = NDX_OK;
-	for (ndx_region_entry_t *e = parent->children_head; e; e = e->sibling_next) {
+	int ret = XY_OK;
+	for (xy_region_entry_t *e = parent->children_head; e; e = e->sibling_next) {
 		ret = fn(e->id, ud);
-		if (ret != NDX_OK) break;
+		if (ret != XY_OK) break;
 	}
-	NDX_SET_ERR(NDX_OK);
+	XY_SET_ERR(XY_OK);
 	return ret;
 }
 
 uint64_t
-ndx_current_region(void)
+xy_current_region(void)
 {
 	uint64_t region_id;
-	int enter_ret = ndx_runtime_ensure();
-	if (enter_ret != NDX_OK) {
-		NDX_SET_ERR(enter_ret);
-		return NDX_REGION_INVALID;
+	int enter_ret = xy_runtime_ensure();
+	if (enter_ret != XY_OK) {
+		XY_SET_ERR(enter_ret);
+		return XY_REGION_INVALID;
 	}
-	region_id = ndx_current_region_id;
+	region_id = xy_current_region_id;
 	return region_id;
 }
 
 int
-ndx_with_region(uint64_t region_id, ndx_scope_fn_t *fn, void *ud)
+xy_with_region(uint64_t region_id, xy_scope_fn_t *fn, void *ud)
 {
-	int enter_ret = ndx_runtime_ensure();
-	if (enter_ret != NDX_OK) {
-		NDX_SET_ERR(enter_ret);
+	int enter_ret = xy_runtime_ensure();
+	if (enter_ret != XY_OK) {
+		XY_SET_ERR(enter_ret);
 		return enter_ret;
 	}
 	if (!fn) {
-		NDX_SET_ERR(NDX_ERR_INVALID);
-		return NDX_ERR_INVALID;
+		XY_SET_ERR(XY_ERR_INVALID);
+		return XY_ERR_INVALID;
 	}
 
-	ndx_region_entry_t *target = region_lookup(region_id);
+	xy_region_entry_t *target = region_lookup(region_id);
 	if (!target) {
-		NDX_SET_ERR(NDX_ERR_NOTFOUND);
-		return NDX_ERR_NOTFOUND;
+		XY_SET_ERR(XY_ERR_NOTFOUND);
+		return XY_ERR_NOTFOUND;
 	}
 
-	uint64_t prev_region_id = ndx_current_region_id;
-	ndx_region_entry_t *prev_region_entry = ndx_current_region_entry;
+	uint64_t prev_region_id = xy_current_region_id;
+	xy_region_entry_t *prev_region_entry = xy_current_region_entry;
 	set_current_region(region_id, target);
 
 	int ret = fn(ud);
 
 	set_current_region(prev_region_id, prev_region_entry);
-	NDX_SET_ERR(ret == NDX_OK ? NDX_OK : ret);
+	XY_SET_ERR(ret == XY_OK ? XY_OK : ret);
 	return ret;
 }
 
@@ -1318,5 +1318,5 @@ ndx_with_region(uint64_t region_id, ndx_scope_fn_t *fn, void *ud)
  * ------------------------------------------------------------------------- */
 
 /* -------------------------------------------------------------------------
- * ndx_shutdown
+ * xy_shutdown
  * ------------------------------------------------------------------------- */

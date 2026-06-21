@@ -1,61 +1,61 @@
-#include "libndx-internal.h"
+#include "libxylem-internal.h"
 
-int ndx_last(void *ret) {
-	int retc = ndx_runtime_ensure();
-	if (retc != NDX_OK) {
-		NDX_SET_ERR(retc);
+int xy_last(void *ret) {
+	int retc = xy_runtime_ensure();
+	if (retc != XY_OK) {
+		XY_SET_ERR(retc);
 		return retc;
 	}
-	if (!ndx.adapter) {
-		NDX_SET_ERR(NDX_ERR_INVALID);
-		return NDX_ERR_INVALID;
+	if (!xy.adapter) {
+		XY_SET_ERR(XY_ERR_INVALID);
+		return XY_ERR_INVALID;
 	}
 	/* T1.5: ran stored in TLS; read ret bytes from TLS retp pointer */
-	if (!ndx_last_ran) {
-		NDX_SET_ERR(NDX_ERR_NOTFOUND);
-		return NDX_ERR_NOTFOUND;
+	if (!xy_last_ran) {
+		XY_SET_ERR(XY_ERR_NOTFOUND);
+		return XY_ERR_NOTFOUND;
 	}
-	if (ret && ndx_last_retp) {
-		memcpy(ret, ndx_last_retp, ndx.adapter->ret_size);
+	if (ret && xy_last_retp) {
+		memcpy(ret, xy_last_retp, xy.adapter->ret_size);
 	}
-	NDX_SET_ERR(NDX_OK);
-	return NDX_OK;
+	XY_SET_ERR(XY_OK);
+	return XY_OK;
 }
 
 /* -------------------------------------------------------------------------
- * ndx_call — region-aware dispatch
+ * xy_call — region-aware dispatch
  * ------------------------------------------------------------------------- */
 
 /*
  * fn_cache_resolve — lazy per-module, per-hook dlsym cache.
  *
  * DISPATCH-SAFETY INVARIANT: this helper is called from inside the DFS
- * dispatch loop of ndx_call. It MUST NOT read ndx_last_adapter.* — that TLS
+ * dispatch loop of xy_call. It MUST NOT read xy_last_adapter.* — that TLS
  * slot is overwritten whenever a module body nested-calls another hook via
- * ndx_call, and we are mid-iteration of the *outer* call.
+ * xy_call, and we are mid-iteration of the *outer* call.
  *
  * Caller must supply hook_id and name from a stable source on its stack.
  *
  * Returns resolved callback, or NULL if the module does not export this
- * hook. Returns (void *)-1 (cast via NDX_FN_RESOLVE_OOM) if cache growth
- * fails; caller treats this as abort (returns NDX_ERR_INVALID).
+ * hook. Returns (void *)-1 (cast via XY_FN_RESOLVE_OOM) if cache growth
+ * fails; caller treats this as abort (returns XY_ERR_INVALID).
  */
-#define NDX_FN_RESOLVE_OOM ((void *)(uintptr_t)-1)
+#define XY_FN_RESOLVE_OOM ((void *)(uintptr_t)-1)
 
 static inline void * __attribute__((always_inline, hot))
-fn_cache_resolve(ndx_mod_entry_t *me, int hook_id, const char *name)
+fn_cache_resolve(xy_mod_entry_t *me, int hook_id, const char *name)
 {
 	if (likely(hook_id >= 0 && hook_id < me->fn_cache_cap)) {
 		void *cb = me->fn_cache[hook_id];
-		if (likely(cb)) return cb == NDX_FN_NOT_FOUND ? NULL : cb;
+		if (likely(cb)) return cb == XY_FN_NOT_FOUND ? NULL : cb;
 	} else if (hook_id >= 0) {
 		if (module_ensure_fn_cache_cap(me, hook_id + 16) < 0)
-			return NDX_FN_RESOLVE_OOM;
+			return XY_FN_RESOLVE_OOM;
 	}
 
 	void *cb = module_lookup_symbol_raw(me->handle, name);
 	if (hook_id >= 0)
-		me->fn_cache[hook_id] = cb ? cb : NDX_FN_NOT_FOUND;
+		me->fn_cache[hook_id] = cb ? cb : XY_FN_NOT_FOUND;
 	if (cb && hook_id >= 0)
 		module_mark_hook_implemented(me, hook_id);
 	return cb;
@@ -64,7 +64,7 @@ fn_cache_resolve(ndx_mod_entry_t *me, int hook_id, const char *name)
 /*
  * fn_cache_prewarm — eagerly resolve all currently-known hooks for one
  * module. Called at module-load time (T1.1) so the first hot-path call
- * doesn't pay dlsym latency. Also called from ndx_areg for every loaded
+ * doesn't pay dlsym latency. Also called from xy_areg for every loaded
  * module when a new hook ID is minted, so the cache stays warm as the
  * hook ID space grows.
  *
@@ -72,10 +72,10 @@ fn_cache_resolve(ndx_mod_entry_t *me, int hook_id, const char *name)
  * should treat -1 as a soft failure (lazy resolve will retry per-call).
  */
 int
-fn_cache_prewarm(ndx_mod_entry_t *me)
+fn_cache_prewarm(xy_mod_entry_t *me)
 {
 	if (!me || !me->handle) return 0;
-	int needed = ndx_hook_id_counter;
+	int needed = xy_hook_id_counter;
 	if (needed <= 0) return 0;
 	if (module_ensure_fn_cache_cap(me, needed + 16) < 0) return -1;
 	/* Iterate hook_id_hd (name → hook_id) and dlsym each in this module */
@@ -87,7 +87,7 @@ fn_cache_prewarm(ndx_mod_entry_t *me)
 		if (hook_id < 0 || hook_id >= me->fn_cache_cap) continue;
 		if (me->fn_cache[hook_id]) continue; /* already resolved */
 		void *cb = module_lookup_symbol_raw(me->handle, name);
-		me->fn_cache[hook_id] = cb ? cb : NDX_FN_NOT_FOUND;
+		me->fn_cache[hook_id] = cb ? cb : XY_FN_NOT_FOUND;
 		if (cb)
 			module_mark_hook_implemented(me, hook_id);
 	}
@@ -95,18 +95,18 @@ fn_cache_prewarm(ndx_mod_entry_t *me)
 }
 
 static int
-region_ensure_hook_dispatch_cap(ndx_region_entry_t *re, int hook_id)
+region_ensure_hook_dispatch_cap(xy_region_entry_t *re, int hook_id)
 {
 	if (!re || hook_id < 0)
-		return NDX_ERR_INVALID;
+		return XY_ERR_INVALID;
 	if (hook_id < re->hook_dispatch_cap)
-		return NDX_OK;
+		return XY_OK;
 
 	int new_cap = hook_id + 16;
-	ndx_hook_dispatch_cache_t *tmp = realloc(re->hook_dispatch,
+	xy_hook_dispatch_cache_t *tmp = realloc(re->hook_dispatch,
 		new_cap * sizeof(*tmp));
 	if (unlikely(!tmp))
-		return NDX_ERR_INVALID;
+		return XY_ERR_INVALID;
 
 	for (int i = re->hook_dispatch_cap; i < new_cap; i++) {
 		tmp[i].slots = NULL;
@@ -117,31 +117,31 @@ region_ensure_hook_dispatch_cap(ndx_region_entry_t *re, int hook_id)
 
 	re->hook_dispatch = tmp;
 	re->hook_dispatch_cap = new_cap;
-	return NDX_OK;
+	return XY_OK;
 }
 
 /* Build the region-local dispatch vector for one hook by filtering the
  * subtree module list down to actual listeners that survive deny checks. */
 static int
-region_rebuild_hook_dispatch(ndx_region_entry_t *re, int hook_id,
+region_rebuild_hook_dispatch(xy_region_entry_t *re, int hook_id,
                              const char *hook_name,
-                             ndx_region_entry_t **anc_chain, int anc_n)
+                             xy_region_entry_t **anc_chain, int anc_n)
 {
 	if (!re || hook_id < 0 || !hook_name)
-		return NDX_ERR_INVALID;
+		return XY_ERR_INVALID;
 	if (re->subtree_mods_dirty && region_rebuild_subtree_mods(re) < 0)
-		return NDX_ERR_INVALID;
-	if (region_ensure_hook_dispatch_cap(re, hook_id) != NDX_OK)
-		return NDX_ERR_INVALID;
+		return XY_ERR_INVALID;
+	if (region_ensure_hook_dispatch_cap(re, hook_id) != XY_OK)
+		return XY_ERR_INVALID;
 
-	ndx_hook_dispatch_cache_t *cache = &re->hook_dispatch[hook_id];
+	xy_hook_dispatch_cache_t *cache = &re->hook_dispatch[hook_id];
 	if (cache->region_gen == re->dispatch_gen)
-		return NDX_OK;
+		return XY_OK;
 	cache->count = 0;
 
 	for (int mi = 0; mi < re->subtree_mods_count; mi++) {
-		ndx_mod_entry_t *me = re->subtree_mods[mi];
-		if (!me || !me->indx)
+		xy_mod_entry_t *me = re->subtree_mods[mi];
+		if (!me || !me->ctx)
 			continue;
 		if (anc_n > 0 && me->load_path) {
 			int denied = 0;
@@ -157,8 +157,8 @@ region_rebuild_hook_dispatch(ndx_region_entry_t *re, int hook_id,
 
 		if (!module_has_hook_implemented(me, hook_id)) {
 			void *cb = fn_cache_resolve(me, hook_id, hook_name);
-			if (unlikely(cb == NDX_FN_RESOLVE_OOM))
-				return NDX_ERR_INVALID;
+			if (unlikely(cb == XY_FN_RESOLVE_OOM))
+				return XY_ERR_INVALID;
 			if (!cb)
 				continue;
 		}
@@ -167,10 +167,10 @@ region_rebuild_hook_dispatch(ndx_region_entry_t *re, int hook_id,
 
 		if (cache->count >= cache->cap) {
 			int new_cap = cache->cap ? cache->cap * 2 : 8;
-			ndx_dispatch_slot_t *tmp = realloc(cache->slots,
+			xy_dispatch_slot_t *tmp = realloc(cache->slots,
 				new_cap * sizeof(*tmp));
 			if (unlikely(!tmp))
-				return NDX_ERR_INVALID;
+				return XY_ERR_INVALID;
 			cache->slots = tmp;
 			cache->cap = new_cap;
 		}
@@ -180,47 +180,47 @@ region_rebuild_hook_dispatch(ndx_region_entry_t *re, int hook_id,
 	}
 
 	cache->region_gen = re->dispatch_gen;
-	return NDX_OK;
+	return XY_OK;
 }
 
 int __attribute__((hot, flatten))
-ndx_call(void *retp, ndx_adapter_t *reg, void *arg)
+xy_call(void *retp, xy_adapter_t *reg, void *arg)
 {
-	int ret = NDX_OK;
+	int ret = XY_OK;
 
-	if (unlikely(!ndx_inited)) {
-		ret = ndx_runtime_ensure();
-		if (ret != NDX_OK) {
-			ndx_zero_ret(retp, reg);
-			NDX_SET_ERR(ret);
+	if (unlikely(!xy_inited)) {
+		ret = xy_runtime_ensure();
+		if (ret != XY_OK) {
+			xy_zero_ret(retp, reg);
+			XY_SET_ERR(ret);
 			return ret;
 		}
 	}
 
 	if (!reg) {
-		NDX_SET_ERR(NDX_ERR_NOTFOUND);
-		return NDX_ERR_NOTFOUND;
+		XY_SET_ERR(XY_ERR_NOTFOUND);
+		return XY_ERR_NOTFOUND;
 	}
 
-	int pre_err = NDX_GET_ERR();
+	int pre_err = XY_GET_ERR();
 	int hook_id = reg->hook_id;
 	void (*dispatch_call)(void *, void *, void *) = reg->call;
-	uint64_t region_id = ndx_current_region_id;
-	ndx_region_entry_t *caller_region_entry = ndx_current_region_entry;
-	ndx_region_entry_t *anc_chain[65];
+	uint64_t region_id = xy_current_region_id;
+	xy_region_entry_t *caller_region_entry = xy_current_region_entry;
+	xy_region_entry_t *anc_chain[65];
 	int anc_n = 0;
 	unsigned ran = 0;
 
 	if (unlikely(hook_id < 0)) {
 		const void *hid_v = qmap_get(hook_id_hd, reg->name);
 		if (!hid_v) {
-			ret = NDX_ERR_NOTFOUND;
+			ret = XY_ERR_NOTFOUND;
 			goto fail;
 		}
 		hook_id = *(const int *)hid_v;
 		reg->hook_id = hook_id;
-		if (hook_id >= 0 && hook_id < ndx_adapter_by_id_cap) {
-			const ndx_adapter_t *canonical = ndx_adapter_by_id[hook_id];
+		if (hook_id >= 0 && hook_id < xy_adapter_by_id_cap) {
+			const xy_adapter_t *canonical = xy_adapter_by_id[hook_id];
 			if (canonical && !dispatch_call) {
 				dispatch_call = canonical->call;
 				reg->call = canonical->call;
@@ -230,18 +230,18 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg)
 		}
 	}
 
-	if (unlikely(reg->ret_size > NDX_MAX_RET_SIZE)) {
-		ret = NDX_ERR_TOOBIG;
+	if (unlikely(reg->ret_size > XY_MAX_RET_SIZE)) {
+		ret = XY_ERR_TOOBIG;
 		goto fail;
 	}
 
-	if (unlikely(!dispatch_call && hook_id >= 0 && hook_id < ndx_adapter_by_id_cap)) {
-		const ndx_adapter_t *canonical = ndx_adapter_by_id[hook_id];
+	if (unlikely(!dispatch_call && hook_id >= 0 && hook_id < xy_adapter_by_id_cap)) {
+		const xy_adapter_t *canonical = xy_adapter_by_id[hook_id];
 		if (canonical)
 			dispatch_call = canonical->call;
 	}
 	if (unlikely(!dispatch_call)) {
-		ret = NDX_ERR_NOTFOUND;
+		ret = XY_ERR_NOTFOUND;
 		goto fail;
 	}
 
@@ -249,60 +249,60 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg)
 		caller_region_entry = region_lookup(region_id);
 
 	uint8_t sflags = caller_region_entry ? caller_region_entry->subtree_flags : 0;
-	if (unlikely(sflags & NDX_SUBTREE_ANY_MASK) && caller_region_entry)
+	if (unlikely(sflags & XY_SUBTREE_ANY_MASK) && caller_region_entry)
 		anc_n = region_ancestor_chain(caller_region_entry, anc_chain, 65);
 
-	if (unlikely(sflags & NDX_SUBTREE_SECURITY_MASK)) {
+	if (unlikely(sflags & XY_SUBTREE_SECURITY_MASK)) {
 		for (int i = 0; i < anc_n; i++) {
 			if (anc_chain[i]->denied_hooks_set &&
 			    qmap_get(anc_chain[i]->denied_hooks_set, reg->name)) {
-				ret = NDX_ERR_EPERM;
+				ret = XY_ERR_EPERM;
 				goto fail;
 			}
 		}
 	}
 
-	ndx_last_ran = 0;
-	ndx_last_retp = retp;
-	ndx.adapter = reg;
+	xy_last_ran = 0;
+	xy_last_retp = retp;
+	xy.adapter = reg;
 
 	if (caller_region_entry) {
 		if (unlikely(caller_region_entry->subtree_mods_dirty) &&
 		    region_rebuild_subtree_mods(caller_region_entry) < 0) {
-			ret = NDX_ERR_INVALID;
+			ret = XY_ERR_INVALID;
 			goto fail;
 		}
 		if (unlikely(hook_id >= caller_region_entry->hook_dispatch_cap) &&
-		    region_ensure_hook_dispatch_cap(caller_region_entry, hook_id) != NDX_OK) {
-			ret = NDX_ERR_INVALID;
+		    region_ensure_hook_dispatch_cap(caller_region_entry, hook_id) != XY_OK) {
+			ret = XY_ERR_INVALID;
 			goto fail;
 		}
 
-		ndx_hook_dispatch_cache_t *cache =
+		xy_hook_dispatch_cache_t *cache =
 			&caller_region_entry->hook_dispatch[hook_id];
 		if (unlikely(cache->region_gen != caller_region_entry->dispatch_gen) &&
 		    region_rebuild_hook_dispatch(caller_region_entry, hook_id, reg->name,
-		                                 anc_chain, anc_n) != NDX_OK) {
-			ret = NDX_ERR_INVALID;
+		                                 anc_chain, anc_n) != XY_OK) {
+			ret = XY_ERR_INVALID;
 			goto fail;
 		}
 
-		ndx_dispatch_slot_t *slots = cache->slots;
+		xy_dispatch_slot_t *slots = cache->slots;
 		int n = cache->count;
 		for (int mi = 0; mi < n; mi++) {
-			ndx_mod_entry_t *me = slots[mi].me;
+			xy_mod_entry_t *me = slots[mi].me;
 			if (mi + 1 < n)
 				__builtin_prefetch(&slots[mi + 1], 0, 1);
-			if (!me || !me->indx || !slots[mi].cb)
+			if (!me || !me->ctx || !slots[mi].cb)
 				continue;
-			ndx_t *indx = me->indx;
-			indx->adapter = reg;
-			indx->region_state = me->region_state;
+			xy_t *ctx = me->ctx;
+			ctx->adapter = reg;
+			ctx->region_state = me->region_state;
 
-			ndx_region_entry_t *prev_rentry = ndx_current_region_entry;
-			uint64_t region_changed = (indx->region_id != region_id);
+			xy_region_entry_t *prev_rentry = xy_current_region_entry;
+			uint64_t region_changed = (ctx->region_id != region_id);
 			if (unlikely(region_changed))
-				set_current_region(indx->region_id, me->region_entry);
+				set_current_region(ctx->region_id, me->region_entry);
 
 			dispatch_call(retp, slots[mi].cb, arg);
 
@@ -312,38 +312,38 @@ ndx_call(void *retp, ndx_adapter_t *reg, void *arg)
 		}
 	}
 
-	ndx_last_ran = ran;
-	ndx_set_last_ret(ran ? retp : NULL, reg->ret_size);
+	xy_last_ran = ran;
+	xy_set_last_ret(ran ? retp : NULL, reg->ret_size);
 	if (!ran && retp)
 		memset(retp, 0, reg->ret_size);
-	if (pre_err != NDX_OK && NDX_GET_ERR() == pre_err)
-		NDX_SET_ERR(NDX_OK);
-	return NDX_OK;
+	if (pre_err != XY_OK && XY_GET_ERR() == pre_err)
+		XY_SET_ERR(XY_OK);
+	return XY_OK;
 
 fail:
-	ndx_last_ran = 0;
-	ndx_set_last_ret(NULL, reg->ret_size);
-	ndx_zero_ret(retp, reg);
-	ndx.adapter = reg;
-	NDX_SET_ERR(ret);
+	xy_last_ran = 0;
+	xy_set_last_ret(NULL, reg->ret_size);
+	xy_zero_ret(retp, reg);
+	xy.adapter = reg;
+	XY_SET_ERR(ret);
 	return ret;
 }
 
 /* -------------------------------------------------------------------------
- * ndx_areg
+ * xy_areg
  * ------------------------------------------------------------------------- */
 
 unsigned
-ndx_areg(char *name, ndx_adapter_t *adapter)
+xy_areg(char *name, xy_adapter_t *adapter)
 {
-	int enter_ret = ndx_runtime_ensure();
-	if (enter_ret != NDX_OK) {
-		NDX_SET_ERR(enter_ret);
-		return NDX_INVALID;
+	int enter_ret = xy_runtime_ensure();
+	if (enter_ret != XY_OK) {
+		XY_SET_ERR(enter_ret);
+		return XY_INVALID;
 	}
-	if (adapter->ret_size > NDX_MAX_RET_SIZE) {
-		NDX_SET_ERR(NDX_ERR_TOOBIG);
-		return NDX_INVALID;
+	if (adapter->ret_size > XY_MAX_RET_SIZE) {
+		XY_SET_ERR(XY_ERR_TOOBIG);
+		return XY_INVALID;
 	}
 	const unsigned *existing = qmap_get(sica_hd, name);
 	if (existing) {
@@ -352,35 +352,35 @@ ndx_areg(char *name, ndx_adapter_t *adapter)
 	}
 	qmap_put(sica_hd, name, &adapter);
 	/* Assign a monotonic hook ID for the fn_cache index */
-	int hook_id = ndx_hook_id_counter++;
+	int hook_id = xy_hook_id_counter++;
 	qmap_put(hook_id_hd, name, &hook_id);
 	/* Write the ID back into the adapter so callers can skip the hash lookup */
 	adapter->hook_id = hook_id;
 	/* Grow adapter-by-id array and store pointer */
-	if (hook_id >= ndx_adapter_by_id_cap) {
+	if (hook_id >= xy_adapter_by_id_cap) {
 		int new_cap = hook_id + 16;
-		ndx_adapter_t **tmp = realloc(ndx_adapter_by_id,
-		                              new_cap * sizeof(ndx_adapter_t *));
+		xy_adapter_t **tmp = realloc(xy_adapter_by_id,
+		                              new_cap * sizeof(xy_adapter_t *));
 		if (unlikely(!tmp)) {
-			NDX_SET_ERR(NDX_ERR_INVALID);
-			return NDX_ERR_INVALID;
+			XY_SET_ERR(XY_ERR_INVALID);
+			return XY_ERR_INVALID;
 		}
-		ndx_adapter_by_id = tmp;
-		memset(ndx_adapter_by_id + ndx_adapter_by_id_cap, 0,
-		       (new_cap - ndx_adapter_by_id_cap) * sizeof(ndx_adapter_t *));
-		ndx_adapter_by_id_cap = new_cap;
+		xy_adapter_by_id = tmp;
+		memset(xy_adapter_by_id + xy_adapter_by_id_cap, 0,
+		       (new_cap - xy_adapter_by_id_cap) * sizeof(xy_adapter_t *));
+		xy_adapter_by_id_cap = new_cap;
 	}
-	ndx_adapter_by_id[hook_id] = adapter;
+	xy_adapter_by_id[hook_id] = adapter;
 	/* T1.1: a new hook ID has been minted — eagerly resolve it in every
 	 * already-loaded module so the first dispatch finds it cached. */
 	if (mod_hd) {
 		unsigned c = qmap_iter(mod_hd, NULL, 0);
 		const void *k, *v;
 		while (qmap_next(&k, &v, c)) {
-			ndx_mod_entry_t *m = qmap_ptr(v);
+			xy_mod_entry_t *m = qmap_ptr(v);
 			if (m) (void)fn_cache_prewarm(m);
 		}
 	}
-	NDX_SET_ERR(NDX_OK);
+	XY_SET_ERR(XY_OK);
 	return 0;
 }

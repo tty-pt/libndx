@@ -1,7 +1,7 @@
 [workspace]
 members = [
-    "ndx-macros",
-    "ndx",
+    "xylem-macros",
+    "xylem",
     "tests/mods/mod_rust_basic",
     "tests/mods/mod_rust_caller",
     "tests/mods/mod_rust_definer",

@@ -1,11 +1,11 @@
-#include <ttypt/ndx.h>
+#include <ttypt/xy.h>
 #include "../../src/papi.h"
 
-ndx_t ndx;
+xy_t xy;
 
-MODULE_API int bare_hook(int x) {
+XY_MODULE_API int bare_hook(int x) {
 	return x + 100;
 }
 
-MODULE_API void ndx_install(void) {}
+XY_MODULE_API void xy_install(void) {}
 

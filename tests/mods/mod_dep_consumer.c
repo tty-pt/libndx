@@ -1,10 +1,10 @@
-#include <ttypt/ndx-mod.h>
+#include <ttypt/xy-mod.h>
 #include "../../tests/test_hooks.h"
 #include <stdio.h>
 
-void ndx_install(void) {
-    if (ndx_load("./tests/mods/mod_dep_provider") != NDX_OK) {
-        fprintf(stderr, "failed to load provider: %s\n", ndx_strerror(ndx.err()));
+void xy_install(void) {
+    if (xy_load("./tests/mods/mod_dep_provider") != XY_OK) {
+        fprintf(stderr, "failed to load provider: %s\n", xy_strerror(xy.err()));
         return;
     }
 }

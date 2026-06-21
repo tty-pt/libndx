@@ -3,8 +3,8 @@ exec_prefix=${prefix}
 libdir=${exec_prefix}/lib
 includedir=${prefix}/include
 
-Name: ndxlib
+Name: xylemlib
 Description: Modding and extensibility library
 Version: 0.2.0
-Libs: -L${libdir} -lndx -lqsys -lqmap
+Libs: -L${libdir} -lxylem -lqsys -lqmap
 Cflags: -I${includedir}

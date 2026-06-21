@@ -4,7 +4,7 @@
 
 Replace the current pair-expanded hook macro API with an explicit
 struct-based API so the project can remove most of the macro machinery in
-`include/ttypt/ndx-pp.h`.
+`include/ttypt/xy-pp.h`.
 
 This document is a plan only. It does not imply the refactor should happen
 immediately.
@@ -47,7 +47,7 @@ struct on_tick_args {
 ### Hook declaration
 
 ```c
-NDX_HOOK_DECL(int, on_tick, struct on_tick_args);
+XY_DECL(int, on_tick, struct on_tick_args);
 ```
 
 Expected effect:
@@ -59,7 +59,7 @@ Expected effect:
 ### Hook definition
 
 ```c
-NDX_HOOK_DEF(int, on_tick, struct on_tick_args);
+XY_DEF(int, on_tick, struct on_tick_args);
 ```
 
 Expected effect:
@@ -70,7 +70,7 @@ Expected effect:
 ### Listener implementation
 
 ```c
-NDX_LISTENER(int, on_tick, struct on_tick_args)
+XY_IMPL(int, on_tick, struct on_tick_args)
 {
 	return args->dt;
 }
@@ -97,9 +97,9 @@ int ret = on_tick(&args);
 The refactor should move the three core macros to this contract:
 
 ```c
-NDX_HOOK_DECL(ftype, fname, argtype)
-NDX_HOOK_DEF(ftype, fname, argtype)
-NDX_LISTENER(ftype, fname, argtype)
+XY_DECL(ftype, fname, argtype)
+XY_DEF(ftype, fname, argtype)
+XY_IMPL(ftype, fname, argtype)
 ```
 
 Where `argtype` is the complete struct type, for example:
@@ -121,13 +121,13 @@ instead of building synthetic local structs from variadic arguments.
 
 ### Public headers
 
-- `include/ttypt/ndx.h`
-- `include/ttypt/ndx-mod.h`
-- `include/ttypt/ndx-pp.h`
+- `include/ttypt/xy.h`
+- `include/ttypt/xy-mod.h`
+- `include/ttypt/xy-pp.h`
 
 ### Library implementation
 
-- `src/libndx.c`
+- `src/libxylem.c`
 
 The runtime dispatch core should need little or no semantic change because it
 already treats arguments as an opaque pointer plus adapter metadata. Most work
@@ -153,9 +153,9 @@ handled carefully and not assumed removable.
 
 Change the existing macro names in place:
 
-- `NDX_HOOK_DECL`
-- `NDX_HOOK_DEF`
-- `NDX_LISTENER`
+- `XY_DECL`
+- `XY_DEF`
+- `XY_IMPL`
 
 Pros:
 
@@ -172,9 +172,9 @@ Cons:
 
 Introduce struct-based variants first, for example:
 
-- `NDX_HOOK_DECL_S`
-- `NDX_HOOK_DEF_S`
-- `NDX_LISTENER_S`
+- `XY_HOOK_DECL_S`
+- `XY_HOOK_DEF_S`
+- `XY_LISTENER_S`
 
 Then migrate tests/docs/examples, and only later rename or remove the old
 pair-based forms.
@@ -194,19 +194,19 @@ unless an explicit breaking-change release is intended.
 
 ## Removal Targets
 
-If the pair-expanded API is fully removed, most of `include/ttypt/ndx-pp.h`
+If the pair-expanded API is fully removed, most of `include/ttypt/xy-pp.h`
 should become unnecessary.
 
 Likely removable:
 
-- `NDX_PC`
+- `XY_PC`
 - `PP_NARG_`
 - `PP_ARG_N`
 - `PAIR_RSEQ_N`
-- `NDX_FA` and `NDX_FA_*`
-- `NDX_PG` and `NDX_PG_*`
-- `NDX_DA` and `NDX_DA_*`
-- `NDX_NP` and `NDX_NP_*`
+- `XY_FA` and `XY_FA_*`
+- `XY_PG` and `XY_PG_*`
+- `XY_DA` and `XY_DA_*`
+- `XY_NP` and `XY_NP_*`
 
 Possibly still useful:
 
@@ -216,14 +216,14 @@ Possibly still useful:
 
 The ideal end state is either:
 
-- a drastically smaller `ndx-pp.h`, or
-- no `ndx-pp.h` at all, with any surviving tiny helpers moved into `ndx.h`
+- a drastically smaller `xy-pp.h`, or
+- no `xy-pp.h` at all, with any surviving tiny helpers moved into `xy.h`
 
 ## Mechanical Refactor Steps
 
 1. Add the new struct-based macro forms.
-2. Update generated adapter typedefs and wrapper functions in `ndx.h`.
-3. Update `ndx-mod.h` wrappers so module-side `NDX_CALL` and convenience
+2. Update generated adapter typedefs and wrapper functions in `xy.h`.
+3. Update `xy-mod.h` wrappers so module-side `XY_CALL` and convenience
    helpers continue to pass the correct typed argument pointer.
 4. Migrate tracked tests and headers to explicit arg structs.
 5. Migrate README and API docs examples.
@@ -244,7 +244,7 @@ int ret = on_tick(&args);
 or
 
 ```c
-NDX_CALL(&ret, on_tick, &args);
+XY_CALL(&ret, on_tick, &args);
 ```
 
 The first is cleaner if the generated wrapper remains part of the API.
@@ -279,7 +279,7 @@ After a successful struct-based migration:
 
 ## Not In Scope
 
-- unrelated runtime changes in `src/libndx.c`
+- unrelated runtime changes in `src/libxylem.c`
 - security or region semantics
 - dead-test cleanup beyond what is necessary to complete the migration
 - local untracked files in a developer worktree

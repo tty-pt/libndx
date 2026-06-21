@@ -1,13 +1,13 @@
 /*
  * test_ptr_args — regression coverage for function-style hook declarations,
- * pointer-return hooks dispatched via libndx's fast path.
+ * pointer-return hooks dispatched via libxylem's fast path.
  *
  * Reproduces the crash shape observed in site/mods/auth where:
- *   - auth.h uses NDX_HOOK_DECL (static adapter with .call == NULL)
- *   - auth.c uses NDX_LISTENER (provides real .call + hook body, registered at load)
+ *   - auth.h uses XY_HOOK_DECL (static adapter with .call == NULL)
+ *   - auth.c uses XY_LISTENER (provides real .call + hook body, registered at load)
  *   - host-binary code calls get_session_user() via the declared inline
  *
- * The declaration path forces ndx_call() to sync .call/.ret_size/.arg_size
+ * The declaration path forces xy_call() to sync .call/.ret_size/.arg_size
  * from the canonical adapter at the first resolution (when reg->hook_id<0).
  */
 #include <assert.h>
@@ -18,7 +18,7 @@
 /* ptr_resolve_remote is defined by the caller module but NOT part of the
  * shared header (caller-module-owned hooks aren't exposed there, mirroring
  * poem.c's hooks not appearing in auth.h). Declare locally for the harness. */
-NDX_HOOK_DECL(const char *, ptr_resolve_remote, int, which);
+XY_HOOK_DECL(const char *, ptr_resolve_remote, int, which);
 
 static void
 test_single_ptr_arg_ptr_ret(void)
@@ -59,7 +59,7 @@ test_repeated_calls_same_hook(void)
 static void
 test_alternating_hooks(void)
 {
-	/* Forces reg != ndx_last_reg every iteration. */
+	/* Forces reg != xy_last_reg every iteration. */
 	for (int i = 0; i < 200; i++) {
 		const char *u = ptr_lookup("tok-alice");
 		assert(u && strcmp(u, "alice") == 0);
@@ -150,11 +150,11 @@ main(void)
 	assert(u == NULL);
 
 	/* Load module B (provides ptr_lookup/len/copy/resolve). */
-	int rc = ndx_load("./tests/mods/mod_ptr_args");
+	int rc = xy_load("./tests/mods/mod_ptr_args");
 	assert(rc == 0);
 
 	/* Load module A (provides ptr_resolve_remote; uses ptr_lookup). */
-	rc = ndx_load("./tests/mods/mod_ptr_args_caller");
+	rc = xy_load("./tests/mods/mod_ptr_args_caller");
 	assert(rc == 0);
 
 	test_single_ptr_arg_ptr_ret();

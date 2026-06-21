@@ -1,8 +1,8 @@
-#include <ttypt/ndx.h>
+#include <ttypt/xy.h>
 #include "../../src/papi.h"
 #include <stdio.h>
 
-ndx_t ndx;
+xy_t xy;
 
 static int init_order = 0;
 static int initRan = 0;
@@ -18,14 +18,14 @@ void mod_auto_init(void) {
     printf("mod_auto_init called\n");
 }
 
-void ndx_install(void) {
+void xy_install(void) {
     if (init_order == 1) {
         init_order = 2;
     }
     installRan = 1;
-    printf("ndx_install called\n");
+    printf("xy_install called\n");
 }
 
-MODULE_API ndx_t* get_ndx_ptr(void) {
-    return &ndx;
+XY_MODULE_API xy_t* get_xy_ptr(void) {
+    return &xy;
 }

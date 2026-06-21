@@ -1,8 +1,8 @@
 #include <assert.h>
 #include <stdio.h>
-#include <ttypt/ndx.h>
+#include <ttypt/xy.h>
 
-NDX_LISTENER(int, init_order_check, int, dummy);
+XY_LISTENER(int, init_order_check, int, dummy);
 
 int init_order_check(int dummy) {
 	(void)dummy;
@@ -10,8 +10,8 @@ int init_order_check(int dummy) {
 }
 
 static void test_auto_init_runs_before_install(void) {
-    int ret = ndx_load("./tests/mods/mod_auto");
-    assert(ret == NDX_OK);
+    int ret = xy_load("./tests/mods/mod_auto");
+    assert(ret == XY_OK);
     
     printf("  test_auto_init_runs_before_install: PASS\n");
 }

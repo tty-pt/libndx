@@ -1,11 +1,11 @@
 [package]
-name = "ndx-macros"
+name = "xylem-macros"
 version = "0.1.1"
 edition = "2021"
-description = "Proc-macro attributes for writing libndx modules and hooks in Rust"
+description = "Proc-macro attributes for writing libxylem modules and hooks in Rust"
 license = "BSD-2-Clause"
 readme = "../README.md"
-repository = "https://github.com/tty-pt/libndx"
+repository = "https://github.com/tty-pt/libxylem"
 keywords = ["plugin", "hooks", "modules", "proc-macro", "extensibility"]
 categories = ["development-tools", "rust-patterns"]
 

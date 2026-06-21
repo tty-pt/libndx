@@ -1,10 +1,10 @@
 /*
- * bench_dispatch — microbenchmark for ndx_call hot path.
+ * bench_dispatch — microbenchmark for xy_call hot path.
  *
  * Reports ns/call for:
  *   - direct hook invocation (single module, single hook)
  *   - alternating hook invocation (hook transition, memcpy path)
- *   - nested dispatch (same-module nested ndx_call)
+ *   - nested dispatch (same-module nested xy_call)
  *   - cross-module nested dispatch (the SIGSEGV regression shape)
  *
  * Pair with: `make bench`. Runs with TSC/monotonic, N iterations each.
@@ -15,10 +15,10 @@
 #include <string.h>
 #include <time.h>
 #include <assert.h>
-#include <ttypt/ndx.h>
+#include <ttypt/xy.h>
 #include "mods/ptr_args.h"
 
-NDX_HOOK_DECL(const char *, ptr_resolve_remote, int, which);
+XY_HOOK_DECL(const char *, ptr_resolve_remote, int, which);
 
 #define ITER_WARM    10000
 #define ITER_MEASURE 2000000
@@ -107,9 +107,9 @@ main(void)
 {
 	printf("bench_dispatch:\n");
 
-	int rc = ndx_load("./tests/mods/mod_ptr_args");
+	int rc = xy_load("./tests/mods/mod_ptr_args");
 	assert(rc == 0);
-	rc = ndx_load("./tests/mods/mod_ptr_args_caller");
+	rc = xy_load("./tests/mods/mod_ptr_args_caller");
 	assert(rc == 0);
 
 	bench_single();

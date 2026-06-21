@@ -6,37 +6,21 @@ version = 4
 name = "mod-rust-basic"
 version = "0.1.0"
 dependencies = [
- "ndx",
+ "xylem",
 ]
 
 [[package]]
 name = "mod-rust-caller"
 version = "0.1.0"
 dependencies = [
- "ndx",
+ "xylem",
 ]
 
 [[package]]
 name = "mod-rust-definer"
 version = "0.1.0"
 dependencies = [
- "ndx",
-]
-
-[[package]]
-name = "ndx"
-version = "0.1.1"
-dependencies = [
- "ndx-macros",
-]
-
-[[package]]
-name = "ndx-macros"
-version = "0.1.1"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
+ "xylem",
 ]
 
 [[package]]
@@ -59,9 +43,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "2.0.117"
+version = "2.0.118"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e665b8803e7b1d2a727f4023456bbbbe74da67099c585258af0ad9c5013b9b99"
+checksum = "1b9ae57f904213ebb649ce6895b8a66c66f0203b9319718f69a5612a065b1422"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -73,3 +57,19 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "xylem"
+version = "0.1.1"
+dependencies = [
+ "xylem-macros",
+]
+
+[[package]]
+name = "xylem-macros"
+version = "0.1.1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]

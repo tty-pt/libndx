@@ -1,21 +1,21 @@
 #include <assert.h>
 #include <stdio.h>
 #include <pthread.h>
-#include <ttypt/ndx.h>
+#include <ttypt/xy.h>
 
 static char mod_path[256];
 
-NDX_HOOK_DEF(int, thread_hook, int, val);
+XY_HOOK_DEF(int, thread_hook, int, val);
 
 static void* load_thread(void *arg) {
 	(void)arg;
-	/* ndx_load is not thread-safe; serialize via a per-thread mutex */
+	/* xy_load is not thread-safe; serialize via a per-thread mutex */
 	static pthread_mutex_t load_mu = PTHREAD_MUTEX_INITIALIZER;
 	for (int i = 0; i < 50; i++) {
 		pthread_mutex_lock(&load_mu);
-		int ret = ndx_load(mod_path);
+		int ret = xy_load(mod_path);
 		pthread_mutex_unlock(&load_mu);
-		assert(ret == NDX_OK);
+		assert(ret == XY_OK);
 	}
 	return NULL;
 }
@@ -53,10 +53,10 @@ static void test_concurrent_call(void) {
 	printf("  test_concurrent_call: PASS\n");
 }
 
-NDX_HOOK_DEF(int, t1_hook, int, x);
-NDX_HOOK_DEF(int, t2_hook, int, x);
-NDX_HOOK_DEF(int, t3_hook, int, x);
-NDX_HOOK_DEF(int, t4_hook, int, x);
+XY_HOOK_DEF(int, t1_hook, int, x);
+XY_HOOK_DEF(int, t2_hook, int, x);
+XY_HOOK_DEF(int, t3_hook, int, x);
+XY_HOOK_DEF(int, t4_hook, int, x);
 
 static void* areg_thread(void *arg) {
 	int idx = *(int*)arg;
@@ -119,8 +119,8 @@ int main(void) {
 	
 	build_mod_path();
 	
-	int ret = ndx_load(mod_path);
-	assert(ret == NDX_OK);
+	int ret = xy_load(mod_path);
+	assert(ret == XY_OK);
 	
 	test_concurrent_load();
 	test_concurrent_call();

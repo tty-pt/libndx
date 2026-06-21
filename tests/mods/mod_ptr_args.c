@@ -1,6 +1,6 @@
 /*
- * mod_ptr_args — pointer-arg/ret hook implementations using NDX_LISTENER.
- * Also tests nested ndx_call: ptr_resolve(key) internally calls ptr_lookup(key).
+ * mod_ptr_args — pointer-arg/ret hook implementations using XY_LISTENER.
+ * Also tests nested xy_call: ptr_resolve(key) internally calls ptr_lookup(key).
  * This mirrors the site/mods/auth pattern where get_request_user ->
  * call_get_session_user from within a module body.
  */
@@ -10,7 +10,7 @@
 #include "../../src/papi.h"
 #include <string.h>
 
-ndx_t ndx;
+xy_t xy;
 
 static const char *lookup_table(const char *token) {
 	if (!token) return NULL;
@@ -29,13 +29,13 @@ static const char *lookup_table(const char *token) {
 	return NULL;
 }
 
-NDX_LISTENER(const char *, ptr_lookup, const char *, token)
+XY_LISTENER(const char *, ptr_lookup, const char *, token)
 {
 	if (!token || !*token) return NULL;
 	return lookup_table(token);
 }
 
-NDX_LISTENER(int, ptr_len, const char *, s)
+XY_LISTENER(int, ptr_len, const char *, s)
 {
 	if (!s) return -1;
 	const char *p = s;
@@ -44,7 +44,7 @@ NDX_LISTENER(int, ptr_len, const char *, s)
 	return (int)(p - s);
 }
 
-NDX_LISTENER(int, ptr_copy, char *, dst, const char *, src, size_t, n)
+XY_LISTENER(int, ptr_copy, char *, dst, const char *, src, size_t, n)
 {
 	if (!dst || !src) return -1;
 	size_t i = 0;
@@ -54,9 +54,9 @@ NDX_LISTENER(int, ptr_copy, char *, dst, const char *, src, size_t, n)
 }
 
 /* Nested-dispatch hook: copies key into a local buffer, then calls
- * ptr_lookup via call_ptr_lookup (which re-enters ndx_call).
+ * ptr_lookup via call_ptr_lookup (which re-enters xy_call).
  * Mirrors get_request_user -> call_get_session_user pattern. */
-NDX_LISTENER(const char *, ptr_resolve, int, which)
+XY_LISTENER(const char *, ptr_resolve, int, which)
 {
 	const char *key;
 	switch (which) {
@@ -68,8 +68,8 @@ NDX_LISTENER(const char *, ptr_resolve, int, which)
 	return ptr_lookup(key);
 }
 
-MODULE_API void ndx_install(void) {}
+XY_MODULE_API void xy_install(void) {}
 
-MODULE_API ndx_t* get_ndx_ptr(void) {
-	return &ndx;
+XY_MODULE_API xy_t* get_xy_ptr(void) {
+	return &xy;
 }

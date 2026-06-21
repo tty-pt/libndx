@@ -1,6 +1,6 @@
-# ndx — Rust bindings for libndx
+# xy — Rust bindings for libxylem
 
-Ergonomic Rust bindings for [libndx](https://github.com/tty-pt/libndx), a C library for hook-based extensibility and dynamic module loading.
+Ergonomic Rust bindings for [libxylem](https://github.com/tty-pt/libxylem), a C library for hook-based extensibility and dynamic module loading.
 
 Modules (shared libraries) implement typed hooks; the host dispatches to all loaded modules that provide a given hook. Modules can load other modules, call other hooks, define new hooks, and manage isolated region namespaces.
 
@@ -10,21 +10,21 @@ Modules (shared libraries) implement typed hooks; the host dispatches to all loa
 
 | Crate | Description |
 |---|---|
-| `ndx` | Ergonomic facade — FFI types, safe wrappers, macros, prelude. **This is what users add as a dependency.** |
-| `ndx-macros` | Proc-macro crate (`#[ndx_listener]`, `#[ndx_hook_decl]`, `#[ndx_hook_def]`, etc.). Used automatically via `ndx`. |
+| `xy` | Ergonomic facade — FFI types, safe wrappers, macros, prelude. **This is what users add as a dependency.** |
+| `xy-macros` | Proc-macro crate (`#[xy_impl]`, `#[xy_decl]`, `#[xy_def]`, etc.). Used automatically via `xy`. |
 
 ---
 
 ## Prerequisites
 
-The Rust crates link against `libndx`. Install it before building:
+The Rust crates link against `libxylem`. Install it before building:
 
 ```sh
 # See https://github.com/tty-pt/ci/blob/main/docs/install.md#install-ttypt-packages
-# and use `libndx` as the package name.
+# and use `libxylem` as the package name.
 ```
 
-`libndx.so` must be findable by the linker at build time and at runtime (`LD_LIBRARY_PATH` or installed to a standard lib path).
+`libxylem.so` must be findable by the linker at build time and at runtime (`LD_LIBRARY_PATH` or installed to a standard lib path).
 
 ---
 
@@ -34,7 +34,7 @@ Add to your module's `Cargo.toml`:
 
 ```toml
 [dependencies]
-ndx = "0.1"
+xy = "0.1"
 
 [lib]
 crate-type = ["cdylib"]
@@ -50,19 +50,19 @@ A minimal module (`src/lib.rs`):
 
 ```rust
 use core::ffi::c_int;
-use ndx::prelude::*;
+use xy::prelude::*;
 
-// Emit `static mut NDX: NdxCtx` and `get_ndx_ptr` export.
-ndx_module!();
+// Emit `static mut XY: XyCtx` and `get_xy_ptr` export.
+xy_module!();
 
 // Implement the `on_tick` hook: receives dt, returns dt + 1.
-#[ndx_listener]
+#[xy_impl]
 pub fn on_tick(dt: c_int) -> c_int {
     dt + 1
 }
 
 // Module entry point — called once on first load.
-ndx_install! {}
+xy_install! {}
 ```
 
 Build it as a shared library:
@@ -72,10 +72,10 @@ cargo build --release
 # produces target/release/libmy_module.so
 ```
 
-Load it from a C host (or another Rust binary using `ndx::load`):
+Load it from a C host (or another Rust binary using `xy::load`):
 
 ```c
-ndx_load("target/release/libmy_module");
+xy_load("target/release/libmy_module");
 int result = on_tick(10); // 11
 ```
 
@@ -83,55 +83,55 @@ int result = on_tick(10); // 11
 
 ## Calling another hook from within a module
 
-Use `#[ndx_hook_decl]` to declare an outbound call. The macro generates a
+Use `#[xy_decl]` to declare an outbound call. The macro generates a
 per-TU static adapter (no `.init_array` registration) and an inline dispatch
-function that routes through the injected `NDX` context.
+function that routes through the injected `XY` context.
 
 ```rust
 use core::ffi::c_int;
-use ndx::prelude::*;
+use xy::prelude::*;
 
-ndx_module!();
+xy_module!();
 
 // Declare on_tick as an outbound call — this module does NOT implement it.
-#[ndx_hook_decl]
+#[xy_decl]
 pub fn on_tick(dt: c_int) -> c_int {}
 
 // rs_relay calls on_tick internally and doubles the result.
-#[ndx_listener]
+#[xy_impl]
 pub fn rs_relay(val: c_int) -> c_int {
     unsafe { on_tick(val) * 2 }
 }
 
-ndx_install! {}
+xy_install! {}
 ```
 
 ---
 
 ## Defining a hook for other modules to implement
 
-Use `#[ndx_hook_def]` to register the canonical adapter for a hook. Other
-modules implement it with `#[ndx_listener]`. Dispatch routes through
-`NDX.call` — any module can define hooks.
+Use `#[xy_def]` to register the canonical adapter for a hook. Other
+modules implement it with `#[xy_impl]`. Dispatch routes through
+`XY.call` — any module can define hooks.
 
 ```rust
 use core::ffi::c_int;
-use ndx::prelude::*;
+use xy::prelude::*;
 
-ndx_module!();
+xy_module!();
 
 // Define the hook — this module owns the canonical adapter.
-// Other modules implement it via #[ndx_listener].
-#[ndx_hook_def]
+// Other modules implement it via #[xy_impl].
+#[xy_def]
 pub fn my_event(val: c_int) -> c_int {}
 
 // Call it from a listener in this same module.
-#[ndx_listener]
+#[xy_impl]
 pub fn trigger(val: c_int) -> c_int {
     unsafe { my_event(val) }
 }
 
-ndx_install! {}
+xy_install! {}
 ```
 
 ---
@@ -139,35 +139,35 @@ ndx_install! {}
 ## Per-region state
 
 Modules can declare per-region state. The framework allocates one instance per
-region the module is loaded into and injects it via `NDX.region_state` before
+region the module is loaded into and injects it via `XY.region_state` before
 each hook dispatch.
 
 ```rust
 use core::ffi::c_int;
-use ndx::prelude::*;
+use xy::prelude::*;
 
-ndx_module!();
+xy_module!();
 
-ndx_region_state! {
+xy_region_state! {
     pub counter: c_int,
 }
-ndx_region_init!();
+xy_region_init!();
 
 // Optional: called by the host on unload to free resources.
 #[no_mangle]
-pub extern "C" fn ndx_region_cleanup(_state: *mut core::ffi::c_void) {}
+pub extern "C" fn xy_region_cleanup(_state: *mut core::ffi::c_void) {}
 
-#[ndx_listener]
+#[xy_impl]
 pub fn increment(dummy: c_int) -> c_int {
     let _ = dummy;
     unsafe {
-        let s = NDX_RS!(NdxRegionState);
+        let s = XY_RS!(XyRegionState);
         (*s).counter += 1;
         (*s).counter
     }
 }
 
-ndx_install! {}
+xy_install! {}
 ```
 
 ---
@@ -175,12 +175,12 @@ ndx_install! {}
 ## Claiming a child region
 
 ```rust
-ndx_module!();
-ndx_claim!(2); // request a 2-bit child region
+xy_module!();
+xy_claim!(2); // request a 2-bit child region
 
-ndx_install! {
-    // ndx_claim is evaluated by the parent's claim handler.
-    // If approved, subsequent ndx_load / ndx_deny calls operate on
+xy_install! {
+    // xy_claim is evaluated by the parent's claim handler.
+    // If approved, subsequent xy_load / xy_deny calls operate on
     // the child region.
 }
 ```
@@ -189,39 +189,39 @@ ndx_install! {
 
 ## Safe wrappers
 
-Inside a module, the following functions are available via `ndx::prelude::*`.
-They all operate through the injected `NDX` context (set by the host before each
-hook dispatch) and return `Result<(), NdxError>` or the relevant value.
+Inside a module, the following functions are available via `xy::prelude::*`.
+They all operate through the injected `XY` context (set by the host before each
+hook dispatch) and return `Result<(), XyError>` or the relevant value.
 
 | Function | Signature | Description |
 |---|---|---|---|
-| `load(ndx, path)` | `unsafe fn load(ndx: &NdxCtx, path: &CStr) -> Result<(), NdxError>` | Load a module by path (no `.so` extension) |
-| `unload(ndx, path)` | `unsafe fn unload(ndx: &NdxCtx, path: &CStr) -> Result<(), NdxError>` | Unload a previously loaded module |
-| `reload(ndx, path)` | `unsafe fn reload(ndx: &NdxCtx, path: &CStr) -> Result<(), NdxError>` | Reload a module in-place |
-| `deny(ndx, what, ty)` | `unsafe fn deny(ndx: &NdxCtx, what: &CStr, ty: NdxDenyType) -> Result<(), NdxError>` | Deny a hook or module in the current region |
-| `require_claim(ndx, handler, ud)` | `unsafe fn require_claim(ndx: &NdxCtx, handler: Option<NdxClaimHandlerFn>, ud: *mut c_void) -> Result<(), NdxError>` | Set a claim handler for child regions |
-| `region_each(ndx, f, ud)` | `unsafe fn region_each(ndx: &NdxCtx, f: Option<NdxRegionEachCbFn>, ud: *mut c_void) -> Result<(), NdxError>` | Iterate over child regions |
-| `with_region(ndx, region_id, f, ud)` | `unsafe fn with_region(ndx: &NdxCtx, region_id: u64, f: Option<NdxScopeFn>, ud: *mut c_void) -> Result<(), NdxError>` | Execute a closure in the context of a specific region |
-| `current_region(ndx)` | `unsafe fn current_region(ndx: &NdxCtx) -> u64` | Return the current region ID |
+| `load(xy, path)` | `unsafe fn load(xy: &XyCtx, path: &CStr) -> Result<(), XyError>` | Load a module by path (no `.so` extension) |
+| `unload(xy, path)` | `unsafe fn unload(xy: &XyCtx, path: &CStr) -> Result<(), XyError>` | Unload a previously loaded module |
+| `reload(xy, path)` | `unsafe fn reload(xy: &XyCtx, path: &CStr) -> Result<(), XyError>` | Reload a module in-place |
+| `deny(xy, what, ty)` | `unsafe fn deny(xy: &XyCtx, what: &CStr, ty: XyDenyType) -> Result<(), XyError>` | Deny a hook or module in the current region |
+| `require_claim(xy, handler, ud)` | `unsafe fn require_claim(xy: &XyCtx, handler: Option<XyClaimHandlerFn>, ud: *mut c_void) -> Result<(), XyError>` | Set a claim handler for child regions |
+| `region_each(xy, f, ud)` | `unsafe fn region_each(xy: &XyCtx, f: Option<XyRegionEachCbFn>, ud: *mut c_void) -> Result<(), XyError>` | Iterate over child regions |
+| `with_region(xy, region_id, f, ud)` | `unsafe fn with_region(xy: &XyCtx, region_id: u64, f: Option<XyScopeFn>, ud: *mut c_void) -> Result<(), XyError>` | Execute a closure in the context of a specific region |
+| `current_region(xy)` | `unsafe fn current_region(xy: &XyCtx) -> u64` | Return the current region ID |
 
 Example — a module that loads a peer module and then operates in a child region:
 
 ```rust
 use core::ffi::{c_int, c_void};
-use ndx::prelude::*;
+use xy::prelude::*;
 
-ndx_module!();
+xy_module!();
 
-#[ndx_listener]
+#[xy_impl]
 pub fn setup(_dummy: c_int) -> c_int {
     unsafe {
-        // Load another module.  NDX is injected by ndx_module!().
-        load(&NDX, c"path/to/peer_module").expect("peer load failed");
+        // Load another module.  XY is injected by xy_module!().
+        load(&XY, c"path/to/peer_module").expect("peer load failed");
     }
     0
 }
 
-ndx_install! {}
+xy_install! {}
 ```
 
 ---
@@ -230,24 +230,24 @@ ndx_install! {}
 
 | Macro / attribute | Where | What it does |
 |---|---|---|
-| `ndx_module!()` | crate root | Emits `static mut NDX: NdxCtx` and `get_ndx_ptr` export |
-| `#[ndx_listener]` | module fn | Registers fn as a hook listener (adapter + `.init_array` entry) |
-| `#[ndx_hook_decl]` | module fn | Declares an outbound hook call (per-TU adapter, no registration) |
-| `#[ndx_hook_def]` | module fn | Defines canonical adapter + dispatch fn; routes through `NDX.call` |
-| `ndx_install! { }` | crate root | Wraps body as `extern "C" fn ndx_install()` |
-| `ndx_claim!(bits)` | crate root | Exports `ndx_claim: u8` symbol |
-| `ndx_region_state! { }` | crate root | Declares `NdxRegionState` struct |
-| `ndx_region_init!()` | after state | Exports `ndx_region_state_size()` |
-| `NDX_RS!(Type)` | hook body | Typed pointer to current region state |
+| `xy_module!()` | crate root | Emits `static mut XY: XyCtx` and `get_xy_ptr` export |
+| `#[xy_impl]` | module fn | Registers fn as a hook listener (adapter + `.init_array` entry) |
+| `#[xy_decl]` | module fn | Declares an outbound hook call (per-TU adapter, no registration) |
+| `#[xy_def]` | module fn | Defines canonical adapter + dispatch fn; routes through `XY.call` |
+| `xy_install! { }` | crate root | Wraps body as `extern "C" fn xy_install()` |
+| `xy_claim!(bits)` | crate root | Exports `xy_claim: u8` symbol |
+| `xy_region_state! { }` | crate root | Declares `XyRegionState` struct |
+| `xy_region_init!()` | after state | Exports `xy_region_state_size()` |
+| `XY_RS!(Type)` | hook body | Typed pointer to current region state |
 
 ---
 
 ## Running the test suite
 
-The tests require `libndx` built locally:
+The tests require `libxylem` built locally:
 
 ```sh
-cd /path/to/libndx
+cd /path/to/libxylem
 make test
 ```
 

@@ -1,21 +1,21 @@
-//! Proc-macro attributes for writing NDX modules in Rust.
+//! Proc-macro attributes for writing XY modules in Rust.
 //!
-//! # `#[ndx_listener]`
+//! # `#[xy_impl]`
 //!
 //! Attach to a `fn` to declare a hook listener. The macro:
 //! - Emits a `#[repr(C)] struct FnameArgs { ... }` for the args
 //! - Emits `fname_adapter_call` (the C-callable dispatch trampoline)
 //! - Emits `FNAME_ADAPTER` as a `#[no_mangle]` global adapter
 //! - Emits `fname_adapter_reg` + an `.init_array` entry so the adapter
-//!   is registered before `ndx_install` runs
+//!   is registered before `xy_install` runs
 //! - Rewrites the function as `pub extern "C" fn fname(...)` so `dlsym` finds it
 //!
-//! # `#[ndx_hook_def]`
+//! # `#[xy_def]`
 //!
-//! Like `#[ndx_listener]` but the function body is replaced with a dispatch
-//! call through the global `ndx_call`. Used in host binaries.
+//! Like `#[xy_impl]` but the function body is replaced with a dispatch
+//! call through the global `xy_call`. Used in host binaries.
 //!
-//! # `#[ndx_hook_decl]`
+//! # `#[xy_decl]`
 //!
 //! Emits args struct + a *per-TU* static adapter (`.call = None`, `hook_id = -1`)
 //! and an inline dispatch function. No `.init_array` entry. Used by modules
@@ -64,7 +64,7 @@ fn parse_hook_sig(item: &ItemFn) -> syn::Result<HookSig> {
             FnArg::Receiver(_) => {
                 return Err(syn::Error::new_spanned(
                     input,
-                    "ndx hooks cannot have a self receiver",
+                    "xy hooks cannot have a self receiver",
                 ));
             }
         }
@@ -77,8 +77,8 @@ fn parse_hook_sig(item: &ItemFn) -> syn::Result<HookSig> {
 /// adapter_reg fn, and .init_array entry.
 ///
 /// `include_init_array`: true for listener/hook_def, false for hook_decl.
-/// `is_definer`: true for `#[ndx_hook_def]` — omits adapter_call and sets
-///   `call: None` in the static; NDX fills the call pointer when listeners
+/// `is_definer`: true for `#[xy_def]` — omits adapter_call and sets
+///   `call: None` in the static; XY fills the call pointer when listeners
 ///   register. This prevents infinite recursion (dispatch fn → adapter_call
 ///   → dispatch fn) that would occur if adapter_call called the dispatch fn.
 fn build_adapter_pieces(
@@ -197,13 +197,13 @@ fn build_adapter_pieces(
 
     let adapter_static = quote! {
         #[no_mangle]
-        pub static mut #adapter_ident: ::ndx::NdxAdapterT = ::ndx::NdxAdapterT {
+        pub static mut #adapter_ident: ::xylem::XyAdapterT = ::xylem::XyAdapterT {
             name: [ #( #name_arr_tokens ),* ],
             arg_size: 0, // filled at runtime in reg
             ret_size: 0, // filled at runtime in reg
             call: #adapter_call_init,
             hook_id: -1,
-            ret: [0i8; ::ndx::NDX_MAX_RET_SIZE],
+            ret: [0i8; ::xylem::XY_MAX_RET_SIZE],
             ran: 0,
         };
     };
@@ -225,7 +225,7 @@ fn build_adapter_pieces(
                 unsafe {
                     #adapter_ident.arg_size = #arg_size;
                     #adapter_ident.ret_size = core::mem::size_of::<#ret_type>();
-                    ::ndx::ndx_areg(
+                    ::xylem::xy_areg(
                         #adapter_ident.name.as_mut_ptr(),
                         &raw mut #adapter_ident,
                     );
@@ -245,8 +245,8 @@ fn build_adapter_pieces(
     }
 }
 
-/// Build the inline dispatch fn used by `#[ndx_hook_decl]` and `#[ndx_hook_def]`.
-/// Dispatch routes through `NDX.call` (module context).
+/// Build the inline dispatch fn used by `#[xy_decl]` and `#[xy_def]`.
+/// Dispatch routes through `XY.call` (module context).
 fn build_dispatch_fn(sig: &HookSig) -> TokenStream2 {
     let name = &sig.name;
     let adapter_ident = format_ident!("{}_adapter", name);
@@ -267,7 +267,7 @@ fn build_dispatch_fn(sig: &HookSig) -> TokenStream2 {
             let mut _ret: #ret_type = unsafe { core::mem::zeroed() };
             #args_init
             unsafe {
-                (NDX.call.unwrap())(
+                (XY.call.unwrap())(
                     &raw mut _ret as *mut ::core::ffi::c_void,
                     &raw mut #adapter_ident,
                     &raw mut _args as *mut ::core::ffi::c_void,
@@ -279,16 +279,16 @@ fn build_dispatch_fn(sig: &HookSig) -> TokenStream2 {
 }
 
 // ---------------------------------------------------------------------------
-// #[ndx_listener]
+// #[xy_impl]
 // ---------------------------------------------------------------------------
 
 /// Declare a hook listener in a module. The annotated fn becomes the hook
 /// implementation; the macro emits the adapter, registration, and trampoline.
 ///
-/// The module must also call `ndx_module!()` at crate root to emit `NDX` and
-/// `get_ndx_ptr`.
+/// The module must also call `xy_module!()` at crate root to emit `XY` and
+/// `get_xy_ptr`.
 #[proc_macro_attribute]
-pub fn ndx_listener(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn xy_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut func = parse_macro_input!(item as ItemFn);
 
     let sig = match parse_hook_sig(&func) {
@@ -314,13 +314,13 @@ pub fn ndx_listener(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 // ---------------------------------------------------------------------------
-// #[ndx_hook_def]  — host-side canonical adapter + dispatch fn
+// #[xy_def]  — host-side canonical adapter + dispatch fn
 // ---------------------------------------------------------------------------
 
 /// Define a canonical hook adapter in a host binary. The function body is
-/// replaced with a dispatch call through global `ndx_call`.
+/// replaced with a dispatch call through global `xy_call`.
 #[proc_macro_attribute]
-pub fn ndx_hook_def(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn xy_def(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let func = parse_macro_input!(item as ItemFn);
 
     let sig = match parse_hook_sig(&func) {
@@ -339,14 +339,14 @@ pub fn ndx_hook_def(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 // ---------------------------------------------------------------------------
-// #[ndx_hook_decl]  — per-TU static adapter + dispatch fn, no registration
+// #[xy_decl]  — per-TU static adapter + dispatch fn, no registration
 // ---------------------------------------------------------------------------
 
 /// Declare a hook for calling (not implementing). Generates a per-TU static
 /// adapter with `.call = None` and an inline dispatch fn that routes through
-/// `NDX.call` (module context).
+/// `XY.call` (module context).
 #[proc_macro_attribute]
-pub fn ndx_hook_decl(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn xy_decl(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let func = parse_macro_input!(item as ItemFn);
 
     let sig = match parse_hook_sig(&func) {
@@ -423,13 +423,13 @@ pub fn ndx_hook_decl(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // Per-TU static — NOT #[no_mangle], call starts at None
     let adapter_static = quote! {
         #[allow(non_upper_case_globals)]
-        static mut #adapter_ident: ::ndx::NdxAdapterT = ::ndx::NdxAdapterT {
+        static mut #adapter_ident: ::xylem::XyAdapterT = ::xylem::XyAdapterT {
             name: [ #( #name_arr_tokens ),* ],
             arg_size: 0,
             ret_size: 0,
             call: None,
             hook_id: -1,
-            ret: [0i8; ::ndx::NDX_MAX_RET_SIZE],
+            ret: [0i8; ::xylem::XY_MAX_RET_SIZE],
             ran: 0,
         };
     };
@@ -456,7 +456,7 @@ pub fn ndx_hook_decl(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
                 #args_init
                 unsafe {
-                    NDX.call.unwrap()(
+                    XY.call.unwrap()(
                         &raw mut _ret as *mut ::core::ffi::c_void,
                         &raw mut #adapter_ident,
                         &raw mut _args as *mut ::core::ffi::c_void,
@@ -477,56 +477,56 @@ pub fn ndx_hook_decl(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 // ---------------------------------------------------------------------------
-// ndx_module!  — emits NDX static + get_ndx_ptr
+// xy_module!  — emits XY static + get_xy_ptr
 // ---------------------------------------------------------------------------
 
-/// Emit the per-module `NDX: NdxCtx` static and `get_ndx_ptr` export.
-/// Also emits a `.init_array` constructor that calls `ndx_self_init_ctx` so
-/// the host can initialize NDX even when `get_ndx_ptr` lookup fails (e.g.
+/// Emit the per-module `XY: XyCtx` static and `get_xy_ptr` export.
+/// Also emits a `.init_array` constructor that calls `xy_self_init_ctx` so
+/// the host can initialize XY even when `get_xy_ptr` lookup fails (e.g.
 /// due to Rust cdylib symbol-resolution quirks with dlsym).
 /// Call once at crate root.
 ///
 /// ```rust,ignore
-/// ndx_module!();
+/// xy_module!();
 /// ```
 #[proc_macro]
-pub fn ndx_module(_input: TokenStream) -> TokenStream {
+pub fn xy_module(_input: TokenStream) -> TokenStream {
     quote! {
-        pub static mut NDX: ::ndx::NdxCtx = ::ndx::NdxCtx::zeroed();
+        pub static mut XY: ::xylem::XyCtx = ::xylem::XyCtx::zeroed();
 
         #[no_mangle]
-        pub unsafe extern "C" fn get_ndx_ptr() -> *mut ::ndx::NdxCtx {
-            &raw mut NDX
+        pub unsafe extern "C" fn get_xy_ptr() -> *mut ::xylem::XyCtx {
+            &raw mut XY
         }
 
-        unsafe extern "C" fn ndx_ctx_self_init() {
-            unsafe { ::ndx::ndx_self_init_ctx(&raw mut NDX); }
+        unsafe extern "C" fn xy_ctx_self_init() {
+            unsafe { ::xylem::xy_self_init_ctx(&raw mut XY); }
         }
 
         #[used]
         #[link_section = ".init_array"]
-        static _NDX_CTX_SELF_INIT_P: unsafe extern "C" fn() = ndx_ctx_self_init;
+        static _XY_CTX_SELF_INIT_P: unsafe extern "C" fn() = xy_ctx_self_init;
     }
     .into()
 }
 
 // ---------------------------------------------------------------------------
-// ndx_install!  — emit ndx_install export
+// xy_install!  — emit xy_install export
 // ---------------------------------------------------------------------------
 
-/// Emit `ndx_install` as a `#[no_mangle] pub extern "C"` function.
+/// Emit `xy_install` as a `#[no_mangle] pub extern "C"` function.
 ///
 /// ```rust,ignore
-/// ndx_install! {
-///     ndx::load(c"tests/mods/mod_foo").unwrap();
+/// xy_install! {
+///     xy::load(c"tests/mods/mod_foo").unwrap();
 /// }
 /// ```
 #[proc_macro]
-pub fn ndx_install(input: TokenStream) -> TokenStream {
+pub fn xy_install(input: TokenStream) -> TokenStream {
     let body = TokenStream2::from(input);
     quote! {
         #[no_mangle]
-        pub unsafe extern "C" fn ndx_install() {
+        pub unsafe extern "C" fn xy_install() {
             #body
         }
     }
@@ -534,57 +534,57 @@ pub fn ndx_install(input: TokenStream) -> TokenStream {
 }
 
 // ---------------------------------------------------------------------------
-// ndx_claim!  — emit the ndx_claim data symbol
+// xy_claim!  — emit the xy_claim data symbol
 // ---------------------------------------------------------------------------
 
-/// Emit `pub static NDX_CLAIM: u8 = N;` so the host can auto-claim a region.
+/// Emit `pub static XY_CLAIM: u8 = N;` so the host can auto-claim a region.
 ///
 /// ```rust,ignore
-/// ndx_claim!(2); // request a 2-bit child region
+/// xy_claim!(2); // request a 2-bit child region
 /// ```
 #[proc_macro]
-pub fn ndx_claim(input: TokenStream) -> TokenStream {
+pub fn xy_claim(input: TokenStream) -> TokenStream {
     let bits = parse_macro_input!(input as syn::LitInt);
     quote! {
         #[no_mangle]
-        pub static ndx_claim: u8 = #bits;
+        pub static xy_claim: u8 = #bits;
     }
     .into()
 }
 
 // ---------------------------------------------------------------------------
-// ndx_region_state! + ndx_region_init!
+// xy_region_state! + xy_region_init!
 // ---------------------------------------------------------------------------
 
-/// Declare the per-region state struct. Follow with `ndx_region_init!()`.
+/// Declare the per-region state struct. Follow with `xy_region_init!()`.
 ///
 /// ```rust,ignore
-/// ndx_region_state! {
+/// xy_region_state! {
 ///     pub counter: c_int,
 /// }
-/// ndx_region_init!();
+/// xy_region_init!();
 /// ```
 ///
-/// Access inside hooks with `NDX_RS!(MyState)`.
+/// Access inside hooks with `XY_RS!(MyState)`.
 #[proc_macro]
-pub fn ndx_region_state(input: TokenStream) -> TokenStream {
+pub fn xy_region_state(input: TokenStream) -> TokenStream {
     let fields = TokenStream2::from(input);
     quote! {
         #[repr(C)]
-        pub struct NdxRegionState {
+        pub struct XyRegionState {
             #fields
         }
     }
     .into()
 }
 
-/// Emit `ndx_region_state_size` after `ndx_region_state!`.
+/// Emit `xy_region_state_size` after `xy_region_state!`.
 #[proc_macro]
-pub fn ndx_region_init(_input: TokenStream) -> TokenStream {
+pub fn xy_region_init(_input: TokenStream) -> TokenStream {
     quote! {
         #[no_mangle]
-        pub extern "C" fn ndx_region_state_size() -> usize {
-            core::mem::size_of::<NdxRegionState>()
+        pub extern "C" fn xy_region_state_size() -> usize {
+            core::mem::size_of::<XyRegionState>()
         }
     }
     .into()

@@ -1,15 +1,15 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-#include <ttypt/ndx.h>
+#include <ttypt/xy.h>
 
 static char mod_path[256];
 
-NDX_HOOK_DEF(int, multi_arg, int, a, int, b, int, c, int, d, int, e, int, f, int, g, int, h);
+XY_HOOK_DEF(int, multi_arg, int, a, int, b, int, c, int, d, int, e, int, f, int, g, int, h);
 
 static void test_multi_args(void) {
-	int ret = ndx_load(mod_path);
-	assert(ret == NDX_OK);
+	int ret = xy_load(mod_path);
+	assert(ret == XY_OK);
 	
 	int result = multi_arg(1, 2, 3, 4, 5, 6, 7, 8);
 	assert(result == 36);
@@ -21,11 +21,11 @@ typedef struct {
 	int y;
 } point_t;
 
-NDX_HOOK_DEF(point_t, struct_hook, int, x, int, y);
+XY_HOOK_DEF(point_t, struct_hook, int, x, int, y);
 
 static void test_struct_return(void) {
-	int ret = ndx_load(mod_path);
-	assert(ret == NDX_OK);
+	int ret = xy_load(mod_path);
+	assert(ret == XY_OK);
 	
 	point_t p = struct_hook(10, 20);
 	assert(p.x == 10);
@@ -33,10 +33,10 @@ static void test_struct_return(void) {
 	printf("  test_struct_return: PASS\n");
 }
 
-NDX_HOOK_DEF(int, one_arg, int, a);
-NDX_HOOK_DEF(int, two_args, int, a, int, b);
-NDX_HOOK_DEF(int, four_args, int, a, int, b, int, c, int, d);
-NDX_HOOK_DEF(int, eight_args, int, a, int, b, int, c, int, d, int, e, int, f, int, g, int, h);
+XY_HOOK_DEF(int, one_arg, int, a);
+XY_HOOK_DEF(int, two_args, int, a, int, b);
+XY_HOOK_DEF(int, four_args, int, a, int, b, int, c, int, d);
+XY_HOOK_DEF(int, eight_args, int, a, int, b, int, c, int, d, int, e, int, f, int, g, int, h);
 
 static void test_arg_counts(void) {
 	assert(one_arg_adapter.arg_size == sizeof(struct one_arg_args));

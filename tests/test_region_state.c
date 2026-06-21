@@ -5,12 +5,12 @@
  *   test_region_state_zeroed      — state fields start at zero
  *   test_region_state_independent — two regions share the same .so but have
  *                                   independent counters
- *   test_region_state_cleanup     — ndx_region_cleanup is called on unload
+ *   test_region_state_cleanup     — xy_region_cleanup is called on unload
  */
 #include <assert.h>
 #include <dlfcn.h>
 #include <stdio.h>
-#include <ttypt/ndx.h>
+#include <ttypt/xy.h>
 #include "region_state_hooks.h"
 
 #define MOD_RS "tests/mods/mod_region_state"
@@ -24,7 +24,7 @@ static int permissive_handler(const char *path, uint8_t req,
                                uint8_t *granted, void *ud) {
 	(void)path; (void)ud;
 	*granted = req;
-	return NDX_OK;
+	return XY_OK;
 }
 
 /* -------------------------------------------------------------------------
@@ -33,7 +33,7 @@ static int permissive_handler(const char *path, uint8_t req,
  * Load the module and immediately read the counter — must be 0.
  * ------------------------------------------------------------------------- */
 static void test_region_state_zeroed(void) {
-	assert(ndx_load(MOD_RS) == NDX_OK);
+	assert(xy_load(MOD_RS) == XY_OK);
 
 	int v = rs_get(0);
 	assert(v == 0);
@@ -50,15 +50,15 @@ static void test_region_state_zeroed(void) {
  *
  * After loading, call rs_increment once.  Both instances run; each returns 1
  * (counter goes 0→1 in its own state).  Because the last-write wins in
- * NDX_CALL, the macro result is 1 — but crucially the second module's counter
+ * XY_CALL, the macro result is 1 — but crucially the second module's counter
  * is 1, not 2 (confirming they don't share state).
  * ------------------------------------------------------------------------- */
 static void test_region_state_independent(void) {
 	/* Enable claim gate — each load gets its own child region */
-	assert(ndx_require_claim(permissive_handler, NULL) == NDX_OK);
+	assert(xy_require_claim(permissive_handler, NULL) == XY_OK);
 
-	assert(ndx_load(MOD_RS) == NDX_OK);  /* child region A */
-	assert(ndx_load(MOD_RS) == NDX_OK);  /* child region B */
+	assert(xy_load(MOD_RS) == XY_OK);  /* child region A */
+	assert(xy_load(MOD_RS) == XY_OK);  /* child region B */
 
 	/* Increment once — both instances run, each increments its own counter */
 	int v = rs_increment(0);
@@ -82,10 +82,10 @@ static void test_region_state_independent(void) {
  * must be non-zero afterwards.
  *
  * Because RTLD_NODELETE keeps the .so mapped, the global survives unload and
- * we can read it via dlsym after ndx_unload.
+ * we can read it via dlsym after xy_unload.
  * ------------------------------------------------------------------------- */
 static void test_region_state_cleanup(void) {
-	assert(ndx_load(MOD_RS) == NDX_OK);
+	assert(xy_load(MOD_RS) == XY_OK);
 
 	/* Read the cleanup counter before unload */
 	void *handle = dlopen("tests/mods/mod_region_state.so",
@@ -95,7 +95,7 @@ static void test_region_state_cleanup(void) {
 	assert(cleanup_ptr);
 	int before = *cleanup_ptr;
 
-	assert(ndx_unload(MOD_RS) == NDX_OK);
+	assert(xy_unload(MOD_RS) == XY_OK);
 
 	int after = *cleanup_ptr;
 	assert(after == before + 1);
@@ -109,16 +109,16 @@ static void test_region_state_cleanup(void) {
  * ------------------------------------------------------------------------- */
 int main(void) {
 	printf("test_region_state:\n");
-	ndx_init();
+	xy_init();
 
 	test_region_state_zeroed();
-	ndx_shutdown(); ndx_init();
+	xy_shutdown(); xy_init();
 
 	test_region_state_independent();
-	ndx_shutdown(); ndx_init();
+	xy_shutdown(); xy_init();
 
 	test_region_state_cleanup();
-	ndx_shutdown();
+	xy_shutdown();
 
 	printf("  all tests passed\n");
 	return 0;

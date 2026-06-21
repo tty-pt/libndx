@@ -2,9 +2,9 @@
 #include <stdio.h>
 #include <string.h>
 
-#include <ttypt/ndx.h>
+#include <ttypt/xy.h>
 
-NDX_HOOK_DEF(int, on_tick, int, dt);
+XY_HOOK_DEF(int, on_tick, int, dt);
 
 static void
 build_mod_path(char *buf, size_t buf_len)
@@ -26,21 +26,21 @@ main(void)
 	assert(ret == 0);
 
 	build_mod_path(mod_path, sizeof(mod_path));
-	ndx_load(mod_path);
+	xy_load(mod_path);
 
 	ret = on_tick(10);
 	assert(ret == 11);
 
 	last = 0;
-	assert(ndx_last(&last) == 0);
+	assert(xy_last(&last) == 0);
 	assert(last == 11);
 
-	ndx_load(mod_path);
+	xy_load(mod_path);
 	ret = on_tick(10);
 	assert(ret == 11); /* second load is a no-op; still one module */
 
 	last = 0;
-	assert(ndx_last(&last) == 0);
+	assert(xy_last(&last) == 0);
 	assert(last == 11);
 
 	puts("ok");

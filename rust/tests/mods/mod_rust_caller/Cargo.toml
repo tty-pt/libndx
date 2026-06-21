@@ -8,7 +8,7 @@ name = "mod_rust_caller"
 crate-type = ["cdylib"]
 
 [dependencies]
-ndx = { path = "../../../ndx" }
+xylem = { path = "../../../xylem" }
 
 [profile.dev]
 panic = "abort"

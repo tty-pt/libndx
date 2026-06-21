@@ -1,4 +1,4 @@
-CFLAGS-libndx-o := -fPIC
-CFLAGS-libndx-module-o := -fPIC
-CFLAGS-libndx-dispatch-o := -fPIC
-CFLAGS-libndx-runtime-o := -fPIC
+CFLAGS-libxylem-o := -fPIC
+CFLAGS-libxylem-module-o := -fPIC
+CFLAGS-libxylem-dispatch-o := -fPIC
+CFLAGS-libxylem-runtime-o := -fPIC

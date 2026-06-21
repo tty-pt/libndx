@@ -1,25 +1,25 @@
-#include <ttypt/ndx.h>
+#include <ttypt/xy.h>
 
 #include "../src/papi.h"
 
-ndx_t ndx;
+xy_t xy;
 
 static int on_tick_mode;
 
-MODULE_API int
+XY_MODULE_API int
 on_tick(int dt)
 {
 	return dt + on_tick_mode;
 }
 
-MODULE_API void
-ndx_install(void)
+XY_MODULE_API void
+xy_install(void)
 {
 	on_tick_mode = 1;
 }
 
-MODULE_API ndx_t *
-get_ndx_ptr(void)
+XY_MODULE_API xy_t *
+get_xy_ptr(void)
 {
-	return &ndx;
+	return &xy;
 }

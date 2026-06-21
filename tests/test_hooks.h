@@ -1,9 +1,9 @@
 #ifndef TEST_HOOKS_H
 #define TEST_HOOKS_H
 
-#include <ttypt/ndx.h>
+#include <ttypt/xy.h>
 
-NDX_HOOK_DECL(int, get_counter, int, dummy);
-NDX_HOOK_DECL(int, increment_counter, int, amount);
+XY_HOOK_DECL(int, get_counter, int, dummy);
+XY_HOOK_DECL(int, increment_counter, int, amount);
 
 #endif

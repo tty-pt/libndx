@@ -6,26 +6,26 @@
 #include <errno.h>
 #include <stdio.h>
 
-#include <ttypt/ndx.h>
-#include <ttypt/ndx-watch.h>
+#include <ttypt/xy.h>
+#include "../include/ttypt/xy-watch.h"
 
 /* Maximum number of simultaneously watched module paths. */
-#define NDX_WATCH_MAX 256
+#define XY_WATCH_MAX 256
 
 /* inotify events that signal the .so was updated:
  *   IN_CLOSE_WRITE  – file was written and closed in-place
  *   IN_MOVED_TO     – atomic rename-into-place (typical linker output)
  */
-#define NDX_WATCH_MASK (IN_CLOSE_WRITE | IN_MOVED_TO)
+#define XY_WATCH_MASK (IN_CLOSE_WRITE | IN_MOVED_TO)
 
 /* ----------------------------------------------------------------------------
  * Internal watch-set entry
  * -------------------------------------------------------------------------- */
 
 typedef struct {
-	char *fname;  /* owned copy of the ndx_load path (no .so suffix) */
+	char *fname;  /* owned copy of the xy_load path (no .so suffix) */
 	int   wd;     /* inotify watch descriptor, or -1 if not active */
-} ndx_watch_entry_t;
+} xy_watch_entry_t;
 
 /* ----------------------------------------------------------------------------
  * Module-level state
@@ -36,7 +36,7 @@ static pthread_t        g_thread;
 static int              g_ifd     = -1;  /* inotify fd */
 static int              g_running = 0;
 
-static ndx_watch_entry_t g_entries[NDX_WATCH_MAX];
+static xy_watch_entry_t g_entries[XY_WATCH_MAX];
 static int               g_entry_count = 0;
 
 /* pipe used to wake the watcher thread on stop */
@@ -51,7 +51,7 @@ static int g_pipe_w = -1;
  * Build the .so path from fname (the caller-supplied basename/relative path).
  * Writes into buf (size buf_len).  Returns buf on success, NULL on truncation.
  *
- * ndx_load strips .so from the path before storing it, so we need to add it
+ * xy_load strips .so from the path before storing it, so we need to add it
  * back to get the actual file on disk.
  */
 static char *
@@ -114,7 +114,7 @@ entry_rewatch(int i)
 	if (!path)
 		return;
 
-	wd = inotify_add_watch(g_ifd, path, NDX_WATCH_MASK);
+	wd = inotify_add_watch(g_ifd, path, XY_WATCH_MASK);
 	g_entries[i].wd = wd; /* -1 on failure is intentional */
 }
 
@@ -124,14 +124,14 @@ entry_rewatch(int i)
 
 /*
  * The watcher thread blocks on read(inotify_fd) and on arrival of an event
- * calls ndx_reload() for the affected module.
+ * calls xy_reload() for the affected module.
  *
- * We use a self-pipe to interrupt the blocking read() when ndx_watch_stop()
+ * We use a self-pipe to interrupt the blocking read() when xy_watch_stop()
  * is called.
  *
- * Because ndx_reload() is not documented as thread-safe we serialise all
+ * Because xy_reload() is not documented as thread-safe we serialise all
  * calls through g_mu.  The lock is dropped before blocking on read() so
- * that ndx_watch_add/remove remain responsive.
+ * that xy_watch_add/remove remain responsive.
  */
 static void *
 watcher_thread(void *arg)
@@ -162,7 +162,7 @@ watcher_thread(void *arg)
 			break;
 		}
 
-		/* Stop signal from ndx_watch_stop(). */
+		/* Stop signal from xy_watch_stop(). */
 		if (FD_ISSET(g_pipe_r, &rfds))
 			break;
 
@@ -183,7 +183,7 @@ watcher_thread(void *arg)
 			ev = (const struct inotify_event *)p;
 			p += sizeof(struct inotify_event) + ev->len;
 
-			if (!(ev->mask & NDX_WATCH_MASK))
+			if (!(ev->mask & XY_WATCH_MASK))
 				continue;
 
 			pthread_mutex_lock(&g_mu);
@@ -207,9 +207,9 @@ watcher_thread(void *arg)
 			if (!fname_copy)
 				continue;
 
-			/* ndx_reload is serialised through g_mu. */
+			/* xy_reload is serialised through g_mu. */
 			pthread_mutex_lock(&g_mu);
-			ndx_reload(fname_copy);
+			xy_reload(fname_copy);
 			pthread_mutex_unlock(&g_mu);
 
 			free(fname_copy);
@@ -224,7 +224,7 @@ watcher_thread(void *arg)
  * -------------------------------------------------------------------------- */
 
 int
-ndx_watch_start(void)
+xy_watch_start(void)
 {
 	int pipefd[2];
 	int ret;
@@ -274,7 +274,7 @@ ndx_watch_start(void)
 }
 
 void
-ndx_watch_stop(void)
+xy_watch_stop(void)
 {
 	pthread_mutex_lock(&g_mu);
 
@@ -311,7 +311,7 @@ ndx_watch_stop(void)
 }
 
 int
-ndx_watch_add(const char *fname)
+xy_watch_add(const char *fname)
 {
 	int idx;
 	char *copy;
@@ -328,7 +328,7 @@ ndx_watch_add(const char *fname)
 		return 0;
 	}
 
-	if (g_entry_count >= NDX_WATCH_MAX) {
+	if (g_entry_count >= XY_WATCH_MAX) {
 		pthread_mutex_unlock(&g_mu);
 		errno = ENOMEM;
 		return -1;
@@ -352,7 +352,7 @@ ndx_watch_add(const char *fname)
 }
 
 void
-ndx_watch_remove(const char *fname)
+xy_watch_remove(const char *fname)
 {
 	int idx;
 	int i;

@@ -1,10 +1,10 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-#include <ttypt/ndx.h>
+#include <ttypt/xy.h>
 
-NDX_HOOK_DEF(int, foo_hook, int, x);
-NDX_HOOK_DEF(int, bar_hook, int, x);
+XY_HOOK_DEF(int, foo_hook, int, x);
+XY_HOOK_DEF(int, bar_hook, int, x);
 
 static void test_adapter_registered(void) {
     assert(strcmp(foo_hook_adapter.name, "foo_hook") == 0);

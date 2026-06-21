@@ -1,11 +1,11 @@
 #include <assert.h>
 #include <stdio.h>
-#include <ttypt/ndx.h>
+#include <ttypt/xy.h>
 #include "test_hooks.h"
 
 static void test_load_provider_first(void) {
-    int ret = ndx_load("./tests/mods/mod_dep_provider");
-    assert(ret == NDX_OK);
+    int ret = xy_load("./tests/mods/mod_dep_provider");
+    assert(ret == XY_OK);
     
     int count = get_counter(0);
     assert(count == 100);
@@ -16,8 +16,8 @@ static void test_load_consumer_loads_provider(void) {
     int count_before = get_counter(0);
     assert(count_before == 100);
     
-    int ret = ndx_load("./tests/mods/mod_dep_consumer");
-    assert(ret == NDX_OK);
+    int ret = xy_load("./tests/mods/mod_dep_consumer");
+    assert(ret == XY_OK);
     
     int count_after = get_counter(0);
     assert(count_after == 100);

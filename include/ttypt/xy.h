@@ -1,67 +1,67 @@
 /**
- * @file ndx.h
+ * @file xy.h
  * @brief Modding and extensibility API.
  *
- * @section ndx_synopsis Synopsis
+ * @section xy_synopsis Synopsis
  * @code
- * NDX_HOOK_DEF(int, on_tick, int, dt);
+ * XY_DEF(int, on_tick, int, dt);
  * on_tick(16);
  * @endcode
  *
- * @section ndx_overview Overview
- * libndx provides a plugin/module system where:
+ * @section xy_overview Overview
+ * libxylem provides a plugin/module system where:
  * - <b>Host</b> defines hooks and loads modules
  * - <b>Module</b> implements hooks in a shared library
  *
- * @section ndx_usage Usage
- * 1. Host uses NDX_HOOK_DEF to define hook signatures
- * 2. Host loads modules via ndx_load()
- * 3. Modules use NDX_LISTENER to implement hooks they provide
- * 4. Modules include ndx-mod.h
+ * @section xy_usage Usage
+ * 1. Host uses XY_DEF to define hook signatures
+ * 2. Host loads modules via xy_load()
+ * 3. Modules use XY_IMPL to implement hooks they provide
+ * 4. Modules include xy-mod.h
  *
- * @section ndx_deps Dependencies
+ * @section xy_deps Dependencies
  * Dependencies between modules are handled through the API:
- * - Common headers use NDX_HOOK_DECL for shared hook signatures
- * - Implementing modules use NDX_LISTENER to define hooks
- * - Dependent modules call ndx_load() in ndx_install() to load dependencies
+ * - Common headers use XY_DECL for shared hook signatures
+ * - Implementing modules use XY_IMPL to define hooks
+ * - Dependent modules call xy_load() in xy_install() to load dependencies
  * - Then call hooks as normal functions from dependencies
  *
- * @section ndx_errors Error Handling
- * - Functions return NDX_OK (0) on success or negative NDX_ERR_* on failure
- * - Use ndx_errno() to get last error code
- * - Use ndx_strerror(err) to get human-readable message
+ * @section xy_errors Error Handling
+ * - Functions return XY_OK (0) on success or negative XY_ERR_* on failure
+ * - Use xy_errno() to get last error code
+ * - Use xy_strerror(err) to get human-readable message
  */
-#ifndef NDX_H
-#define NDX_H
+#ifndef XY_H
+#define XY_H
 
 /* RECOMMENDATIONS:
  *
- * - Avoid passing entire objects in NDX calls. It's not very
+ * - Avoid passing entire objects in xy calls. It's not very
  *   useful since getting / putting things by id can be fast.
  *   Only when you really don't have another way because you
  *   modify the object in the calling function and don't put
- *   and set around the NDX_CALL. Usually mods will use their
+ *   and set around the XY_CALL. Usually mods will use their
  *   custom object types, anyway.
  */
 
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
-#include <ttypt/ndx-pp.h>
+#include <ttypt/xy-pp.h>
 #include <ttypt/qsys.h>
 
 /**
  * @brief Maximum size for return types in hooks.
  *
  * Return types larger than this will cause a compile-time static assertion
- * when using NDX_HOOK_DEF or NDX_LISTENER.
+ * when using XY_DEF or XY_IMPL.
  */
-#define NDX_MAX_RET_SIZE 4096
+#define XY_MAX_RET_SIZE 4096
 
 /**
  * @brief Invalid hook ID returned when lookup fails.
  */
-#define NDX_INVALID ((unsigned) -1)
+#define XY_INVALID ((unsigned) -1)
 
 /**
  * @brief Mark intentionally-unused symbols or parameters.
@@ -71,38 +71,38 @@
 /**
  * @brief Success return code.
  */
-#define NDX_OK             0
+#define XY_OK             0
 
 /**
  * @brief Error: Module or hook not found.
  */
-#define NDX_ERR_NOTFOUND  -1
+#define XY_ERR_NOTFOUND  -1
 
 /**
  * @brief Error: Invalid argument passed to function.
  */
-#define NDX_ERR_INVALID   -2
+#define XY_ERR_INVALID   -2
 
 /**
- * @brief Error: Return type exceeds NDX_MAX_RET_SIZE / no slot available.
+ * @brief Error: Return type exceeds XY_MAX_RET_SIZE / no slot available.
  */
-#define NDX_ERR_TOOBIG    -3
+#define XY_ERR_TOOBIG    -3
 
 /**
  * @brief Error: Library initialization failed.
  */
-#define NDX_ERR_INIT      -4
+#define XY_ERR_INIT      -4
 
 /**
  * @brief Error: Operation not permitted (deny, claim, unload veto, etc.).
  */
-#define NDX_ERR_EPERM     -5
+#define XY_ERR_EPERM     -5
 
 /**
  * @brief Adapter for dispatching hook calls to modules.
  *
  * This struct is used internally to route calls to all modules
- * that implement a given hook. Created automatically by NDX_LISTENER.
+ * that implement a given hook. Created automatically by XY_IMPL.
  */
 typedef struct {
 	/** @brief Name of the hook (e.g., "on_tick") */
@@ -117,23 +117,23 @@ typedef struct {
 	/** @brief Internal call dispatcher */
 	void (*call)(void *, void *, void *);
 
-	/** @brief Monotonic hook ID assigned by ndx_areg(); used for O(1) dispatch.
-	 *  Zero-initialised by NDX_LISTENER; filled in by ndx_areg() on first registration. */
+	/** @brief Monotonic hook ID assigned by xy_areg(); used for O(1) dispatch.
+	 *  Zero-initialised by XY_IMPL; filled in by xy_areg() on first registration. */
 	int hook_id;
 
 	/** @brief Buffer for last return value */
-	char ret[NDX_MAX_RET_SIZE];
+	char ret[XY_MAX_RET_SIZE];
 
 	/** @brief Number of modules that ran this hook */
 	unsigned ran;
-} ndx_adapter_t;
+} xy_adapter_t;
 
-typedef int ndx_scope_fn_t(void *ud);
+typedef int xy_scope_fn_t(void *ud);
 
 /**
  * @brief Module callback function type.
  *
- * Used for mod_auto_init(), ndx_install()
+ * Used for mod_auto_init(), xy_install()
  */
 typedef void (*mod_cb_t)(void);
 
@@ -141,12 +141,12 @@ typedef void (*mod_cb_t)(void);
   /**
    * @brief Export symbol from module (Windows).
    */
-  #define MODULE_API __declspec(dllexport)
+  #define XY_MODULE_API __declspec(dllexport)
 #else
   /**
    * @brief Export symbol from module (POSIX).
    */
-  #define MODULE_API __attribute__((visibility("default")))
+  #define XY_MODULE_API __attribute__((visibility("default")))
 #endif
 
 #if defined(__APPLE__)
@@ -161,68 +161,78 @@ typedef void (*mod_cb_t)(void);
   #define AUTO_INIT __attribute__((used)) __attribute__((section(".init_array")))
 #endif
 
-#define __NDX_HOOK_DISPATCH(retp, adapterp, argp) \
-	ndx_call((retp), (adapterp), (argp))
+#define __XY_DISPATCH(retp, adapterp, argp) \
+	xy_call((retp), (adapterp), (argp))
+
+/* ---------------------------------------------------------------------------
+ * Backward-compat aliases — old macro names.  Keep for a transition period.
+ * ------------------------------------------------------------------------- */
+#ifndef XY_NO_DEPRECATED
+#define XY_HOOK_DEF(...)   XY_DEF(__VA_ARGS__)
+#define XY_HOOK_DECL(...)  XY_DECL(__VA_ARGS__)
+#define XY_LISTENER(...)   XY_IMPL(__VA_ARGS__)
+#define __XY_HOOK_DISPATCH(...) __XY_DISPATCH(__VA_ARGS__)
+#endif
 
 /**
  * @brief Declare a hook that can be called like a normal function.
  *
  * This is the preferred declaration form for call sites that should read as
- * ordinary C. The generated inline function still routes through NDX_CALL, so
+ * ordinary C. The generated inline function still routes through XY_CALL, so
  * the current execution region is preserved.
  *
  * Do not use this macro in the same translation unit that defines a listener
- * for the same hook name with NDX_LISTENER; the listener should keep using
- * NDX_LISTENER and dispatch recursively with NDX_CALL when needed.
+ * for the same hook name with XY_IMPL; the listener should keep using
+ * XY_IMPL and dispatch recursively with XY_CALL when needed.
  */
-#define NDX_HOOK_DECL(ftype, fname, ...) \
-	typedef ftype fname##_t(NDX_FA(__VA_ARGS__)); \
+#define XY_DECL(ftype, fname, ...) \
+	typedef ftype fname##_t(XY_FA(__VA_ARGS__)); \
 	struct fname##_args { \
-		NDX_PG(__VA_ARGS__) \
+		XY_PG(__VA_ARGS__) \
 	}; \
-	static ndx_adapter_t __ndx_decl_##fname##_adapter = { \
+	static xy_adapter_t __xy_decl_##fname##_adapter = { \
 		.name = XSTR(fname), \
 		.arg_size = sizeof(struct fname##_args), \
 		.ret_size = sizeof(ftype), \
 		.hook_id = -1, \
 	}; \
 	static inline UNUSED \
-	ftype fname(NDX_FA(__VA_ARGS__)) { \
+	ftype fname(XY_FA(__VA_ARGS__)) { \
 		ftype ret; \
-		struct fname##_args args = { NDX_DA(__VA_ARGS__) }; \
-		__NDX_HOOK_DISPATCH(&ret, &__ndx_decl_##fname##_adapter, &args); \
+		struct fname##_args args = { XY_DA(__VA_ARGS__) }; \
+		__XY_DISPATCH(&ret, &__xy_decl_##fname##_adapter, &args); \
 		return ret; \
 	} \
-	typedef int __ndx_hook_decl_##fname##_semicolon_eater_t
+	typedef int __xy_decl_##fname##_semicolon_eater_t
 
 /**
  * @brief Define the canonical adapter for a normal-function hook.
  *
- * Use NDX_HOOK_DECL in shared headers; use NDX_HOOK_DEF in the one
- * translation unit that emits the canonical adapter. NDX_HOOK_DEF is
+ * Use XY_DECL in shared headers; use XY_DEF in the one
+ * translation unit that emits the canonical adapter. XY_DEF is
  * self-sufficient in definition TUs and also provides the ordinary call
  * syntax there.
  */
-#define NDX_HOOK_DEF(ftype, fname, ...) \
-	typedef ftype fname##_t(NDX_FA(__VA_ARGS__)); \
+#define XY_DEF(ftype, fname, ...) \
+	typedef ftype fname##_t(XY_FA(__VA_ARGS__)); \
 	struct fname##_args { \
-		NDX_PG(__VA_ARGS__) \
+		XY_PG(__VA_ARGS__) \
 	}; \
-	static ndx_adapter_t __ndx_decl_##fname##_adapter = { \
+	static xy_adapter_t __xy_decl_##fname##_adapter = { \
 		.name = XSTR(fname), \
 		.arg_size = sizeof(struct fname##_args), \
 		.ret_size = sizeof(ftype), \
 		.hook_id = -1, \
 	}; \
 	static inline UNUSED \
-	ftype fname(NDX_FA(__VA_ARGS__)) { \
+	ftype fname(XY_FA(__VA_ARGS__)) { \
 		ftype ret; \
-		struct fname##_args args = { NDX_DA(__VA_ARGS__) }; \
-		__NDX_HOOK_DISPATCH(&ret, &__ndx_decl_##fname##_adapter, &args); \
+		struct fname##_args args = { XY_DA(__VA_ARGS__) }; \
+		__XY_DISPATCH(&ret, &__xy_decl_##fname##_adapter, &args); \
 		return ret; \
 	} \
-	_Static_assert(sizeof(ftype) <= NDX_MAX_RET_SIZE, \
-		"return type too large for ndx_adapter_t"); \
+	_Static_assert(sizeof(ftype) <= XY_MAX_RET_SIZE, \
+		"return type too large for xy_adapter_t"); \
 	void fname##_adapter_call(void *res, void *fn, void *arg) { \
 		fname##_t *cast_fn; \
 		if (!fn) { \
@@ -232,11 +242,11 @@ typedef void (*mod_cb_t)(void);
 			return; \
 		} \
 		* (void **) &cast_fn = fn; \
-		struct fname##_args *__ndx_a = arg; (void)__ndx_a; \
-		ftype result = cast_fn(NDX_NP(__VA_ARGS__)); \
+		struct fname##_args *__xy_a = arg; (void)__xy_a; \
+		ftype result = cast_fn(XY_NP(__VA_ARGS__)); \
 		if (res) *(ftype *)res = result; \
 	} \
-	ndx_adapter_t fname##_adapter  __attribute__((visibility("default"))) = { \
+	xy_adapter_t fname##_adapter  __attribute__((visibility("default"))) = { \
 		.name = XSTR(fname), \
 		.arg_size = sizeof(struct fname##_args), \
 		.ret_size = sizeof(ftype), \
@@ -244,7 +254,7 @@ typedef void (*mod_cb_t)(void);
 		.hook_id = -1, \
 	}; \
 	void fname##_adapter_reg(void) { \
-		ndx_areg(XSTR(fname), &fname##_adapter); \
+		xy_areg(XSTR(fname), &fname##_adapter); \
 	} \
 	AUTO_INIT \
 	void (*fname##_adapter_reg_p)(void) = fname##_adapter_reg
@@ -268,19 +278,19 @@ typedef void (*mod_cb_t)(void);
  *
  * Example:
  * @code
- * NDX_LISTENER(int, on_tick, int, dt);
+ * XY_IMPL(int, on_tick, int, dt);
  * int on_tick(int dt) { return dt + 1; }
  * @endcode
  */
-#define NDX_LISTENER(ftype, fname, ...) \
-	typedef ftype fname##_t(NDX_FA(__VA_ARGS__)); \
+#define XY_IMPL(ftype, fname, ...) \
+	typedef ftype fname##_t(XY_FA(__VA_ARGS__)); \
 	fname##_t fname; \
 	struct fname##_args { \
-		NDX_PG(__VA_ARGS__) \
+		XY_PG(__VA_ARGS__) \
 	}; \
-	extern ndx_adapter_t fname##_adapter; \
-	_Static_assert(sizeof(ftype) <= NDX_MAX_RET_SIZE, \
-		"return type too large for ndx_adapter_t"); \
+	extern xy_adapter_t fname##_adapter; \
+	_Static_assert(sizeof(ftype) <= XY_MAX_RET_SIZE, \
+		"return type too large for xy_adapter_t"); \
 	fname##_t fname; \
 	void fname##_adapter_call(void *res, void *fn, void *arg) { \
 	fname##_t *cast_fn; \
@@ -291,11 +301,11 @@ typedef void (*mod_cb_t)(void);
 		return; \
 	} \
 	* (void **) &cast_fn = fn; \
-	struct fname##_args *__ndx_a = arg; (void)__ndx_a; \
-	ftype result = cast_fn(NDX_NP(__VA_ARGS__)); \
+	struct fname##_args *__xy_a = arg; (void)__xy_a; \
+	ftype result = cast_fn(XY_NP(__VA_ARGS__)); \
 	if (res) *(ftype *)res = result; \
 	} \
-	ndx_adapter_t fname##_adapter  __attribute__((visibility("default"))) = { \
+	xy_adapter_t fname##_adapter  __attribute__((visibility("default"))) = { \
 		.name = XSTR(fname), \
 		.arg_size = sizeof(struct fname##_args), \
 		.ret_size = sizeof(ftype), \
@@ -303,11 +313,11 @@ typedef void (*mod_cb_t)(void);
 		.hook_id = -1, \
 	}; \
 	void fname##_adapter_reg(void) { \
-		ndx_areg(XSTR(fname), &fname##_adapter); \
+		xy_areg(XSTR(fname), &fname##_adapter); \
 	} \
 	AUTO_INIT \
 	void (*fname##_adapter_reg_p)(void) = fname##_adapter_reg; \
-	ftype fname(NDX_FA(__VA_ARGS__))
+	ftype fname(XY_FA(__VA_ARGS__))
 
 /**
  * @brief Call a mod hook by name within the current thread-local region.
@@ -323,38 +333,38 @@ typedef void (*mod_cb_t)(void);
  * Example:
  * @code
  * int result;
- * NDX_CALL(&result, on_tick, 16);
+ * XY_CALL(&result, on_tick, 16);
  * @endcode
  */
 /* the caller uses this to call */
-#define NDX_CALL(retp, fname, ...) { \
+#define XY_CALL(retp, fname, ...) { \
 	struct fname##_args args = { __VA_ARGS__ }; \
-	ndx_call(retp, &fname##_adapter, &args); \
+	xy_call(retp, &fname##_adapter, &args); \
 }
 
-/* Internal types - used by ndx_t struct */
-typedef unsigned ndx_areg_t(char *name, ndx_adapter_t *adapter);
-typedef int ndx_call_t(void *retp, ndx_adapter_t *adapter, void *args);
-typedef int ndx_last_t(void *ret);
+/* Internal types - used by xy_t struct */
+typedef unsigned xy_areg_t(char *name, xy_adapter_t *adapter);
+typedef int xy_call_t(void *retp, xy_adapter_t *adapter, void *args);
+typedef int xy_last_t(void *ret);
 
 /* -------------------------------------------------------------------------
  * Region API types
  * ------------------------------------------------------------------------- */
 
-/** Root region — ancestor of all regions.  Passing this to ndx_call
+/** Root region — ancestor of all regions.  Passing this to xy_call
  *  dispatches to every module regardless of its region. */
-#define NDX_REGION_ROOT ((uint64_t)0)
+#define XY_REGION_ROOT ((uint64_t)0)
 
 /** Sentinel returned when region allocation fails. */
-#define NDX_REGION_INVALID ((uint64_t)-1)
+#define XY_REGION_INVALID ((uint64_t)-1)
 
 /**
  * @brief Deny target (hook name or module path) selector.
  */
 typedef enum {
-	NDX_DENY_HOOK   = 0, /**< @p what is a hook name */
-	NDX_DENY_MODULE = 1, /**< @p what is a module path */
-} ndx_deny_type_t;
+	XY_DENY_HOOK   = 0, /**< @p what is a hook name */
+	XY_DENY_MODULE = 1, /**< @p what is a module path */
+} xy_deny_type_t;
 
 /**
  * @brief Deny a hook or module within the caller's current region.
@@ -362,11 +372,11 @@ typedef enum {
  * The deny applies to sub-regions only (children-only semantics by default).
  * A module's own region is never blocked by its own deny.
  *
- * @param what  Hook name (NDX_DENY_HOOK) or module path (NDX_DENY_MODULE).
- * @param type  NDX_DENY_HOOK or NDX_DENY_MODULE.
- * @return NDX_OK or a negative NDX_ERR_* code.
+ * @param what  Hook name (XY_DENY_HOOK) or module path (XY_DENY_MODULE).
+ * @param type  XY_DENY_HOOK or XY_DENY_MODULE.
+ * @return XY_OK or a negative XY_ERR_* code.
  */
-typedef int ndx_deny_t(const char *what, ndx_deny_type_t type);
+typedef int xy_deny_t(const char *what, xy_deny_type_t type);
 
 /**
  * @brief Claim handler type.
@@ -374,10 +384,10 @@ typedef int ndx_deny_t(const char *what, ndx_deny_type_t type);
  * @param module_path    Path of the child module making the request (read-only)
  * @param requested_bits Number of bits the child asked for
  * @param granted_bits   Out-param: set to the approved width
- * @param ud             User data from ndx_require_claim()
- * @return NDX_OK to approve (with *granted_bits set), NDX_ERR_EPERM to reject.
+ * @param ud             User data from xy_require_claim()
+ * @return XY_OK to approve (with *granted_bits set), XY_ERR_EPERM to reject.
  */
-typedef int ndx_claim_handler_fn_t(const char *module_path,
+typedef int xy_claim_handler_fn_t(const char *module_path,
                                     uint8_t     requested_bits,
                                     uint8_t    *granted_bits,
                                     void       *ud);
@@ -385,24 +395,24 @@ typedef int ndx_claim_handler_fn_t(const char *module_path,
 /**
  * @brief Set or clear the claim gate on the caller's current region.
  *
- * When @p fn is non-NULL, the gate is opened: all subsequent ndx_load() calls
- * into this region require the module to export a `MODULE_API uint8_t ndx_claim`
- * data symbol.  If the symbol is absent, ndx_load() returns NDX_ERR_EPERM and
- * ndx_install() never runs.  If the symbol is present, the host performs the
- * claim on behalf of the module by invoking @p fn before running ndx_install().
+ * When @p fn is non-NULL, the gate is opened: all subsequent xy_load() calls
+ * into this region require the module to export a `XY_MODULE_API uint8_t xy_claim`
+ * data symbol.  If the symbol is absent, xy_load() returns XY_ERR_EPERM and
+ * xy_install() never runs.  If the symbol is present, the host performs the
+ * claim on behalf of the module by invoking @p fn before running xy_install().
  *
- * Modules loaded *before* this call in the same ndx_install() context are
+ * Modules loaded *before* this call in the same xy_install() context are
  * unaffected — they load flat into the current region as normal.
  *
- * When @p fn is NULL, the gate is cleared: subsequent ndx_load() calls no
- * longer require an ndx_claim symbol.  A later non-NULL call re-enables the
+ * When @p fn is NULL, the gate is cleared: subsequent xy_load() calls no
+ * longer require an xy_claim symbol.  A later non-NULL call re-enables the
  * gate.
  *
  * @param fn  Claim handler function, or NULL to clear the claim gate.
  * @param ud  User data passed to fn (ignored when fn is NULL).
- * @return NDX_OK or negative NDX_ERR_* code.
+ * @return XY_OK or negative XY_ERR_* code.
  */
-typedef int ndx_require_claim_t(ndx_claim_handler_fn_t *fn, void *ud);
+typedef int xy_require_claim_t(xy_claim_handler_fn_t *fn, void *ud);
 
 /**
  * @brief Enumerate immediate child regions of the caller's current region.
@@ -410,77 +420,77 @@ typedef int ndx_require_claim_t(ndx_claim_handler_fn_t *fn, void *ud);
  * Calls @p fn(child_id, ud) for each child in allocation order.
  * child_id is an opaque uint64_t region identifier.
  *
- * Return NDX_OK from @p fn to continue, any other value to stop.
- * ndx_region_each returns the last value returned by @p fn, or NDX_OK if
+ * Return XY_OK from @p fn to continue, any other value to stop.
+ * xy_region_each returns the last value returned by @p fn, or XY_OK if
  * there were no children.
  */
-typedef int ndx_region_each_fn_t(uint64_t child_id, void *ud);
-typedef int ndx_region_each_t(ndx_region_each_fn_t *fn, void *ud);
-typedef int ndx_with_region_t(uint64_t region_id, ndx_scope_fn_t *fn, void *ud);
-typedef uint64_t ndx_current_region_t(void);
+typedef int xy_region_each_fn_t(uint64_t child_id, void *ud);
+typedef int xy_region_each_t(xy_region_each_fn_t *fn, void *ud);
+typedef int xy_with_region_t(uint64_t region_id, xy_scope_fn_t *fn, void *ud);
+typedef uint64_t xy_current_region_t(void);
 
-ndx_areg_t   ndx_areg;
-ndx_call_t   ndx_call;
-ndx_last_t   ndx_last;
-ndx_deny_t           ndx_deny;
-ndx_require_claim_t  ndx_require_claim;
-ndx_region_each_t    ndx_region_each;
-ndx_with_region_t    ndx_with_region;
-ndx_current_region_t ndx_current_region;
+xy_areg_t   xy_areg;
+xy_call_t   xy_call;
+xy_last_t   xy_last;
+xy_deny_t           xy_deny;
+xy_require_claim_t  xy_require_claim;
+xy_region_each_t    xy_region_each;
+xy_with_region_t    xy_with_region;
+xy_current_region_t xy_current_region;
 
 /**
  * @brief Load or reload a module into the caller's current region.
  *
  * @param fname     Path to .so (Linux) or .dll (Windows) file
- * @return NDX_OK on success, negative error code on failure
+ * @return XY_OK on success, negative error code on failure
  *
- * On first load, calls ndx_install().
+ * On first load, calls xy_install().
  * Subsequent loads of the same path into the same region are no-ops.
  */
-typedef int ndx_load_t(char *fname);
-ndx_load_t ndx_load;
+typedef int xy_load_t(char *fname);
+xy_load_t xy_load;
 
 /**
  * @brief Unload a previously loaded module from the caller's current region.
  *
  * Decrements the module's reference count.  When the count reaches zero:
- *  - Calls the module's ndx_uninstall() export (if present); if it returns
- *    non-zero the unload is aborted and NDX_ERR_EPERM is returned.
+ *  - Calls the module's xy_uninstall() export (if present); if it returns
+ *    non-zero the unload is aborted and XY_ERR_EPERM is returned.
  *  - Recursively unloads child modules whose reference count would reach zero.
  *  - Removes deny entries registered by the module.
  *  - Invalidates cached function pointers across all other modules.
  *  - Calls dlclose() and frees internal bookkeeping.
  *
- * @param fname  Path that was passed to ndx_load() (without .so/.dll suffix)
- * @return NDX_OK on success, NDX_ERR_NOTFOUND if not loaded, NDX_ERR_EPERM if
- *         ndx_uninstall() vetoed the unload.
+ * @param fname  Path that was passed to xy_load() (without .so/.dll suffix)
+ * @return XY_OK on success, XY_ERR_NOTFOUND if not loaded, XY_ERR_EPERM if
+ *         xy_uninstall() vetoed the unload.
  */
-typedef int ndx_unload_t(char *fname);
-ndx_unload_t ndx_unload;
+typedef int xy_unload_t(char *fname);
+xy_unload_t xy_unload;
 
 /**
  * @brief Reload a module in place, preserving its dispatch position.
  *
- * Equivalent to ndx_unload() followed by ndx_load() in the same region, but
+ * Equivalent to xy_unload() followed by xy_load() in the same region, but
  * the reloaded module is re-inserted at its original position in the dispatch
  * order rather than appended at the tail.
  *
- * If ndx_uninstall() vetoes the unload the reload is aborted.
+ * If xy_uninstall() vetoes the unload the reload is aborted.
  *
- * @param fname  Path that was passed to ndx_load() (without .so/.dll suffix)
- * @return NDX_OK on success, negative NDX_ERR_* on failure.
+ * @param fname  Path that was passed to xy_load() (without .so/.dll suffix)
+ * @return XY_OK on success, negative XY_ERR_* on failure.
  */
-typedef int ndx_reload_t(char *fname);
-ndx_reload_t ndx_reload;
+typedef int xy_reload_t(char *fname);
+xy_reload_t xy_reload;
 
 /**
  * @brief Shutdown and unload all modules.
  *
  * Calls dlclose() on all loaded module handles.
- * After this, ndx_load() can be called again.
+ * After this, xy_load() can be called again.
  */
-typedef void ndx_shutdown_t(void);
-ndx_shutdown_t ndx_shutdown;
+typedef void xy_shutdown_t(void);
+xy_shutdown_t xy_shutdown;
 
 /**
  * @brief Get last error code.
@@ -489,57 +499,57 @@ ndx_shutdown_t ndx_shutdown;
  *
  * Most API functions set this on failure.
  */
-typedef int ndx_errno_t(void);
-ndx_errno_t ndx_errno;
+typedef int xy_errno_t(void);
+xy_errno_t xy_errno;
 
 /**
  * @brief Get human-readable error message.
  *
- * @param err Error code (e.g., from ndx_errno())
+ * @param err Error code (e.g., from xy_errno())
  * @return Static string describing the error
  */
-typedef const char *ndx_strerror_t(int err);
-ndx_strerror_t ndx_strerror;
+typedef const char *xy_strerror_t(int err);
+xy_strerror_t xy_strerror;
 
-void ndx_init(void);
+void xy_init(void);
 
-struct ndx_ctx {
-	ndx_call_t       *call;
-	ndx_areg_t       *areg;
-	ndx_load_t       *load;
-	ndx_errno_t      *err;
-	ndx_strerror_t   *strerror;
-	ndx_adapter_t    *adapter;
-	ndx_last_t       *last;
-	ndx_shutdown_t   *shutdown;
+struct xy_ctx {
+	xy_call_t       *call;
+	xy_areg_t       *areg;
+	xy_load_t       *load;
+	xy_errno_t      *err;
+	xy_strerror_t   *strerror;
+	xy_adapter_t    *adapter;
+	xy_last_t       *last;
+	xy_shutdown_t   *shutdown;
 	/** @brief Path this module was loaded from; set by host, read-only to module */
 	const char       *module_path;
 	/** @brief Region ID assigned to this module at load time */
 	uint64_t          region_id;
 	/* region management API */
-	ndx_deny_t            *deny;
-	ndx_require_claim_t   *require_claim;
-	ndx_region_each_t     *region_each;
-	ndx_with_region_t     *with_region;
-	ndx_current_region_t  *current_region;
+	xy_deny_t            *deny;
+	xy_require_claim_t   *require_claim;
+	xy_region_each_t     *region_each;
+	xy_with_region_t     *with_region;
+	xy_current_region_t  *current_region;
 	/* unload / reload */
-	ndx_unload_t          *unload;
-	ndx_reload_t          *reload;
+	xy_unload_t          *unload;
+	xy_reload_t          *reload;
 	/** @brief Per-region module state pointer; set by framework before each
-	 *  hook dispatch.  NULL if the module did not export ndx_region_state_size. */
+	 *  hook dispatch.  NULL if the module did not export xy_region_state_size. */
 	void                  *region_state;
 };
 
 /**
- * @brief Register a module's NDX context from a .init_array constructor.
+ * @brief Register a module's xy context from a .init_array constructor.
  *
  * Rust cdylibs call this from a .init_array constructor (generated by
- * ndx_module!()) to push their NDX context pointer to the loader before
- * mod_load_bind_ndx runs.  The loader uses it as a fallback when
- * get_ndx_ptr lookup fails or returns an unexpected result.
+ * xy_module!()) to push their xy context pointer to the loader before
+ * mod_load_bind_xy runs.  The loader uses it as a fallback when
+ * get_xy_ptr lookup fails or returns an unexpected result.
  *
- * @param ctx  Pointer to the module-local NdxCtx static.
+ * @param ctx  Pointer to the module-local XyCtx static.
  */
-void ndx_self_init_ctx(struct ndx_ctx *ctx);
+void xy_self_init_ctx(struct xy_ctx *ctx);
 
 #endif
