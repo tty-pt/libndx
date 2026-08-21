@@ -1,4 +1,8 @@
 #include "libxylem-internal.h"
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <errno.h>
 
 enum opts {
 	OPT_DETACH = 1,
@@ -730,15 +734,19 @@ module_cleanup_region_state(xy_mod_entry_t *entry)
 	entry->region_state = NULL;
 }
 
+int xy_reloading = 0;
+
 void
 module_free_entry(xy_mod_entry_t *entry, int close_handle)
 {
 	void *handle;
+	char *tmp = NULL;
 
 	if (!entry)
 		return;
 
 	handle = entry->handle;
+	tmp = entry->tmp_load_path;
 	module_cleanup_region_state(entry);
 	free(entry->fn_cache);
 	free(entry->hook_impl_bits);
@@ -747,6 +755,10 @@ module_free_entry(xy_mod_entry_t *entry, int close_handle)
 
 	if (close_handle && handle)
 		dlclose(handle);
+	if (tmp) {
+		unlink(tmp);
+		free(tmp);
+	}
 }
 
 void
@@ -761,6 +773,8 @@ mod_load_restore_context(xy_load_txn_t *tx)
 int
 mod_load_abort(xy_load_txn_t *tx, int err)
 {
+	char *tmp = NULL;
+
 	if (!tx)
 		return err;
 
@@ -786,35 +800,150 @@ mod_load_abort(xy_load_txn_t *tx, int err)
 		qmap_del(mod_hd, tx->mod_entry->mod_key);
 	}
 	if (tx->mod_entry) {
+		tmp = tx->mod_entry->tmp_load_path;
 		free(tx->mod_entry->fn_cache);
 		free(tx->mod_entry->hook_impl_bits);
 		free(tx->mod_entry->mod_key);
 		free(tx->mod_entry);
+		if (tmp) {
+			unlink(tmp);
+			free(tmp);
+		}
 	} else if (tx->stable_key) {
 		free(tx->stable_key);
 	}
 	if (tx->stable_fname)
 		free(tx->stable_fname);
+	if (tx->tmp_load_path) {
+		unlink(tx->tmp_load_path);
+		free(tx->tmp_load_path);
+		tx->tmp_load_path = NULL;
+	}
 	module_lookup_result_free(&tx->lookup);
-	if (tx->handle)
+	if (tx->handle) {
 		dlclose(tx->handle);
+		tx->handle = NULL;
+	}
 	return err;
+}
+
+static int
+copy_one(const char *src, const char *tmpl_in, char **out_tmp)
+{
+	char tmpl[512];
+	int out_fd;
+	int in_fd = -1;
+	int rc = -1;
+
+	if (strlen(tmpl_in) >= sizeof(tmpl))
+		return -1;
+	strcpy(tmpl, tmpl_in);
+	out_fd = mkstemps(tmpl, 3);
+	if (out_fd < 0)
+		return -1;
+	in_fd = open(src, O_RDONLY);
+	if (in_fd < 0)
+		goto out;
+	{
+		char buf[8192];
+		ssize_t n;
+		while ((n = read(in_fd, buf, sizeof(buf))) > 0) {
+			char *p = buf;
+			ssize_t w;
+			while (n > 0) {
+				w = write(out_fd, p, (size_t)n);
+				if (w <= 0)
+					goto out;
+				p += w;
+				n -= w;
+			}
+		}
+		if (n < 0)
+			goto out;
+	}
+	if (fchmod(out_fd, 0755) != 0)
+		goto out;
+	if (fsync(out_fd) != 0)
+		goto out;
+	{
+		char *slash = strrchr(tmpl, '/');
+		if (slash) {
+			char dir[512];
+			size_t dlen = (size_t)(slash - tmpl);
+			if (dlen < sizeof(dir)) {
+				memcpy(dir, tmpl, dlen);
+				dir[dlen] = '\0';
+				int dir_fd = open(dir, O_DIRECTORY);
+				if (dir_fd >= 0) {
+					fsync(dir_fd);
+					close(dir_fd);
+				}
+			}
+		}
+	}
+	rc = 0;
+	*out_tmp = strdup(tmpl);
+out:
+	if (in_fd >= 0)
+		close(in_fd);
+	close(out_fd);
+	if (rc != 0)
+		unlink(tmpl);
+	return rc;
+}
+
+static int
+copy_to_tmp(const char *src, char **out_tmp)
+{
+	char tmpl2[512];
+	const char *slash = strrchr(src, '/');
+
+	if (slash) {
+		size_t dir_len = (size_t)(slash - src);
+		if (dir_len + 32 < sizeof(tmpl2)) {
+			memcpy(tmpl2, src, dir_len);
+			tmpl2[dir_len] = '\0';
+			strcat(tmpl2, "/.xylem-XXXXXX.so");
+			if (copy_one(src, tmpl2, out_tmp) == 0)
+				return 0;
+		}
+	}
+	if (copy_one(src, "/tmp/xylem-XXXXXX.so", out_tmp) == 0)
+		return 0;
+	if (copy_one(src, "./tmp/xylem-XXXXXX.so", out_tmp) == 0)
+		return 0;
+	return -1;
 }
 
 int
 mod_load_open_handle(xy_load_txn_t *tx, char *fname)
 {
+	char *tmp = NULL;
+
 	tx->lookup = module_lookup_from_fname(fname, tx->inherited_region_id);
 	if (tx->lookup.err != XY_OK)
 		return tx->lookup.err;
 	if (!tx->lookup.load_path)
 		return XY_ERR_INVALID;
 
-	tx->handle = dlopen(tx->lookup.load_path, RTLD_NOW | RTLD_LOCAL | RTLD_NODELETE);
-	if (!tx->handle) {
-		WARN("_mod_load failed loading '%s': %s\n", fname, dlerror());
-		module_lookup_result_free(&tx->lookup);
-		return XY_ERR_NOTFOUND;
+	if (xy_reloading && copy_to_tmp(tx->lookup.load_path, &tmp) == 0) {
+		tx->handle = dlopen(tmp, RTLD_NOW | RTLD_LOCAL | RTLD_NODELETE);
+		if (!tx->handle) {
+			WARN("_mod_load failed loading '%s' (tmp %s): %s\n",
+			     fname, tmp, dlerror());
+			unlink(tmp);
+			free(tmp);
+			module_lookup_result_free(&tx->lookup);
+			return XY_ERR_NOTFOUND;
+		}
+		tx->tmp_load_path = tmp;
+	} else {
+		tx->handle = dlopen(tx->lookup.load_path, RTLD_NOW | RTLD_LOCAL | RTLD_NODELETE);
+		if (!tx->handle) {
+			WARN("_mod_load failed loading '%s': %s\n", fname, dlerror());
+			module_lookup_result_free(&tx->lookup);
+			return XY_ERR_NOTFOUND;
+		}
 	}
 
 	return XY_OK;
@@ -830,6 +959,11 @@ mod_load_try_reuse_existing(xy_load_txn_t *tx)
 	existing->refcount++;
 	dlclose(tx->handle);
 	tx->handle = NULL;
+	if (tx->tmp_load_path) {
+		unlink(tx->tmp_load_path);
+		free(tx->tmp_load_path);
+		tx->tmp_load_path = NULL;
+	}
 	module_lookup_result_free(&tx->lookup);
 	return 1;
 }
@@ -852,12 +986,14 @@ mod_load_alloc_entry(xy_load_txn_t *tx, char *fname)
 	if (!tx->mod_entry)
 		return XY_ERR_INVALID;
 
-	tx->mod_entry->handle       = tx->handle;
-	tx->mod_entry->region_id    = tx->inherited_region_id;
-	tx->mod_entry->refcount     = 1;
-	tx->mod_entry->parent_entry = xy_loading_mod;
-	tx->mod_entry->mod_key      = tx->stable_key;
-	tx->mod_entry->load_path    = tx->interned_load_path;
+	tx->mod_entry->handle        = tx->handle;
+	tx->mod_entry->region_id     = tx->inherited_region_id;
+	tx->mod_entry->refcount      = 1;
+	tx->mod_entry->parent_entry  = xy_loading_mod;
+	tx->mod_entry->mod_key       = tx->stable_key;
+	tx->mod_entry->load_path     = tx->interned_load_path;
+	tx->mod_entry->tmp_load_path = tx->tmp_load_path;
+	tx->tmp_load_path = NULL;
 
 	return XY_OK;
 }

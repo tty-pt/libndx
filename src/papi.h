@@ -142,6 +142,7 @@ typedef struct xy_mod_entry {
     int       hook_impl_words;
     /* Owned copy of the composite hash key ("path\0<region_hex>") for removal */
     char *mod_key;
+    char *tmp_load_path;
 } xy_mod_entry_t;
 
 /* -------------------------------------------------------------------------

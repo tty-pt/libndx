@@ -223,6 +223,8 @@ int xy_unload(char *fname) {
 	return ret;
 }
 
+extern int xy_reloading;
+
 int xy_reload(char *fname) {
 	int enter_ret = xy_runtime_ensure();
 	if (enter_ret != XY_OK) {
@@ -256,8 +258,11 @@ int xy_reload(char *fname) {
 		return uret;
 	}
 
-	/* Load the module again */
+	/* Load the module again — use unique inode to bypass glibc cache */
+	extern int xy_reloading;
+	xy_reloading = 1;
 	int lret = _mod_load(fname);
+	xy_reloading = 0;
 	if (lret != XY_OK) {
 		XY_SET_ERR(lret);
 		return lret;

@@ -143,6 +143,7 @@ typedef struct {
 	char               *stable_fname;
 	char               *stable_key;
 	const char         *interned_load_path;
+	char               *tmp_load_path;
 	xy_mod_entry_t    *mod_entry;
 	xy_region_entry_t *inherited_reg;
 	uint64_t            inherited_region_id;
