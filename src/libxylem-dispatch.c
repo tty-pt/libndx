@@ -313,11 +313,15 @@ xy_call(void *retp, xy_adapter_t *reg, void *arg)
 	}
 
 	xy_last_ran = ran;
-	xy_set_last_ret(ran ? retp : NULL, reg->ret_size);
-	if (!ran && retp)
-		memset(retp, 0, reg->ret_size);
-	if (pre_err != XY_OK && XY_GET_ERR() == pre_err)
-		XY_SET_ERR(XY_OK);
+	if (!ran) {
+		xy_set_last_ret(NULL, reg->ret_size);
+		if (retp)
+			memset(retp, 0, reg->ret_size);
+		XY_SET_ERR(XY_ERR_NOTFOUND);
+		return XY_ERR_NOTFOUND;
+	}
+	xy_set_last_ret(retp, reg->ret_size);
+	XY_SET_ERR(XY_OK);
 	return XY_OK;
 
 fail:
