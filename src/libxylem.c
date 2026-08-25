@@ -1019,7 +1019,7 @@ mod_load_bind_xy(xy_load_txn_t *tx)
 		if (!dbg) dbg = fopen("tmp/xy_bind.log", "a");
 		if (dbg) {
 			fprintf(dbg, "mod_load_bind_xy: fname=%s get_xy=%p\n",
-				tx->stable_fname, (void *)get_xy);
+				tx->stable_fname, (void *)(uintptr_t)get_xy);
 			fclose(dbg);
 		}
 	}
@@ -1079,7 +1079,7 @@ mod_load_bind_xy(xy_load_txn_t *tx)
 		if (!dbg) dbg = fopen("tmp/xy_bind.log", "a");
 		if (dbg) {
 			fprintf(dbg, "mod_load_bind_xy: xy.call=%p for %s\n",
-				(void *)ctx->call, tx->stable_fname);
+				(void *)(uintptr_t)ctx->call, tx->stable_fname);
 			fclose(dbg);
 		}
 	}

@@ -203,6 +203,7 @@ xy_call(void *retp, xy_adapter_t *reg, void *arg)
 	}
 
 	int pre_err = XY_GET_ERR();
+	(void)pre_err;
 	int hook_id = reg->hook_id;
 	void (*dispatch_call)(void *, void *, void *) = reg->call;
 	uint64_t region_id = xy_current_region_id;
