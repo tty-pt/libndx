@@ -6,5 +6,6 @@
 /man
 *.so
 *.o
+*.d
 *.dll
 *.exe
