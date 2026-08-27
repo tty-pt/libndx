@@ -1014,6 +1014,7 @@ mod_load_bind_xy(xy_load_txn_t *tx)
 	xy_t *ctx = NULL;
 
 	module_lookup_symbol_fn(tx->handle, "get_xy_ptr", &get_xy, sizeof(get_xy));
+#ifdef XY_DEBUG_LOG
 	{
 		FILE *dbg = fopen("/tmp/xy_bind.log", "a");
 		if (!dbg) dbg = fopen("tmp/xy_bind.log", "a");
@@ -1023,8 +1024,10 @@ mod_load_bind_xy(xy_load_txn_t *tx)
 			fclose(dbg);
 		}
 	}
+#endif
 	if (get_xy) {
 		ctx = get_xy();
+#ifdef XY_DEBUG_LOG
 		{
 			FILE *dbg = fopen("/tmp/xy_bind.log", "a");
 			if (!dbg) dbg = fopen("tmp/xy_bind.log", "a");
@@ -1034,12 +1037,14 @@ mod_load_bind_xy(xy_load_txn_t *tx)
 				fclose(dbg);
 			}
 		}
+#endif
 	}
 
 	/* Fallback: Rust cdylibs call xy_self_init_ctx() from a .init_array
 	 * constructor (inside dlopen) to push their xy pointer to us before
 	 * mod_load_bind_xy runs. Use that when get_xy_ptr lookup fails. */
 	if (!ctx && xy_pending_ctx) {
+#ifdef XY_DEBUG_LOG
 		FILE *dbg = fopen("/tmp/xy_bind.log", "a");
 		if (!dbg) dbg = fopen("tmp/xy_bind.log", "a");
 		if (dbg) {
@@ -1047,12 +1052,14 @@ mod_load_bind_xy(xy_load_txn_t *tx)
 				(void *)xy_pending_ctx);
 			fclose(dbg);
 		}
+#endif
 		ctx = xy_pending_ctx;
 	}
 
 	xy_pending_ctx = NULL;
 
 	if (!ctx) {
+#ifdef XY_DEBUG_LOG
 		FILE *dbg = fopen("/tmp/xy_bind.log", "a");
 		if (!dbg) dbg = fopen("tmp/xy_bind.log", "a");
 		if (dbg) {
@@ -1060,9 +1067,11 @@ mod_load_bind_xy(xy_load_txn_t *tx)
 				tx->stable_fname);
 			fclose(dbg);
 		}
+#endif
 		return XY_OK;
 	}
 
+#ifdef XY_DEBUG_LOG
 	{
 		FILE *dbg = fopen("/tmp/xy_bind.log", "a");
 		if (!dbg) dbg = fopen("tmp/xy_bind.log", "a");
@@ -1073,7 +1082,9 @@ mod_load_bind_xy(xy_load_txn_t *tx)
 			fclose(dbg);
 		}
 	}
+#endif
 	_xy_init(ctx, tx->stable_fname, tx->inherited_region_id);
+#ifdef XY_DEBUG_LOG
 	{
 		FILE *dbg = fopen("/tmp/xy_bind.log", "a");
 		if (!dbg) dbg = fopen("tmp/xy_bind.log", "a");
@@ -1083,6 +1094,7 @@ mod_load_bind_xy(xy_load_txn_t *tx)
 			fclose(dbg);
 		}
 	}
+#endif
 	tx->mod_entry->ctx = ctx;
 	return XY_OK;
 }

@@ -2,9 +2,13 @@
 #include <stdio.h>
 
 static void _dbg(const char *msg) {
+#ifdef XY_DEBUG_LOG
 	FILE *f = fopen("/tmp/xy_bind.log", "a");
 	if (!f) f = fopen("tmp/xy_bind.log", "a");
 	if (f) { fputs(msg, f); fclose(f); }
+#else
+	(void)msg;
+#endif
 }
 
 int _mod_run(void *sl, const char *symbol) {
