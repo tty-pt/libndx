@@ -99,10 +99,34 @@ void *qmap_ptr(const void *value);
 void *module_lookup_symbol_raw(void *handle, const char *symbol);
 int module_lookup_symbol_fn(void *handle, const char *symbol, void *fn_out, size_t fn_size);
 void xy_zero_ret(void *retp, const xy_adapter_t *reg);
-void xy_set_last_ret(const void *retp, size_t ret_size);
-int module_ensure_hook_impl_words(xy_mod_entry_t *me, int hook_id);
+static inline void __attribute__((always_inline))
+xy_set_last_ret(const void *retp, size_t ret_size)
+{
+	if (likely(retp && ret_size > 0)) {
+		if (likely(ret_size <= sizeof(uint64_t))) {
+			uint64_t v = 0;
+			memcpy(&v, retp, ret_size);
+			memcpy(xy_last_retbuf, &v, sizeof(uint64_t));
+		} else {
+			memcpy(xy_last_retbuf, retp, ret_size);
+		}
+		xy_last_retp = xy_last_retbuf;
+	} else {
+		xy_last_retp = NULL;
+	}
+}
+
+static inline int __attribute__((always_inline))
+module_has_hook_implemented(const xy_mod_entry_t *me, int hook_id)
+{
+	if (unlikely(!me || hook_id < 0))
+		return 0;
+	int word = hook_id / 64;
+	if (unlikely(word >= me->hook_impl_words))
+		return 0;
+	return (me->hook_impl_bits[word] & ((uint64_t)1 << (hook_id % 64))) != 0;
+}
 void module_mark_hook_implemented(xy_mod_entry_t *me, int hook_id);
-int module_has_hook_implemented(const xy_mod_entry_t *me, int hook_id);
 int module_ensure_fn_cache_cap(xy_mod_entry_t *me, int needed);
 xy_region_entry_t *region_lookup(uint64_t id);
 const char *module_path_intern(char *path);

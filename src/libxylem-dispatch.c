@@ -290,26 +290,46 @@ xy_call(void *retp, xy_adapter_t *reg, void *arg)
 
 		xy_dispatch_slot_t *slots = cache->slots;
 		int n = cache->count;
-		for (int mi = 0; mi < n; mi++) {
-			xy_mod_entry_t *me = slots[mi].me;
-			if (mi + 1 < n)
-				__builtin_prefetch(&slots[mi + 1], 0, 1);
-			if (!me || !me->ctx || !slots[mi].cb)
-				continue;
-			xy_t *ctx = me->ctx;
-			ctx->adapter = reg;
-			ctx->region_state = me->region_state;
+		if (likely(n == 1)) {
+			xy_mod_entry_t *me = slots[0].me;
+			if (likely(me && me->ctx && slots[0].cb)) {
+				xy_t *ctx = me->ctx;
+				ctx->adapter = reg;
+				ctx->region_state = me->region_state;
 
-			xy_region_entry_t *prev_rentry = xy_current_region_entry;
-			uint64_t region_changed = (ctx->region_id != region_id);
-			if (unlikely(region_changed))
-				set_current_region(ctx->region_id, me->region_entry);
+				uint64_t region_changed = (ctx->region_id != region_id);
+				if (unlikely(region_changed)) {
+					xy_region_entry_t *prev_rentry = xy_current_region_entry;
+					set_current_region(ctx->region_id, me->region_entry);
+					dispatch_call(retp, slots[0].cb, arg);
+					set_current_region(region_id, prev_rentry);
+				} else {
+					dispatch_call(retp, slots[0].cb, arg);
+				}
+				ran = 1;
+			}
+		} else {
+			for (int mi = 0; mi < n; mi++) {
+				xy_mod_entry_t *me = slots[mi].me;
+				if (mi + 1 < n)
+					__builtin_prefetch(&slots[mi + 1], 0, 1);
+				if (!me || !me->ctx || !slots[mi].cb)
+					continue;
+				xy_t *ctx = me->ctx;
+				ctx->adapter = reg;
+				ctx->region_state = me->region_state;
 
-			dispatch_call(retp, slots[mi].cb, arg);
+				xy_region_entry_t *prev_rentry = xy_current_region_entry;
+				uint64_t region_changed = (ctx->region_id != region_id);
+				if (unlikely(region_changed))
+					set_current_region(ctx->region_id, me->region_entry);
 
-			if (unlikely(region_changed))
-				set_current_region(region_id, prev_rentry);
-			ran++;
+				dispatch_call(retp, slots[mi].cb, arg);
+
+				if (unlikely(region_changed))
+					set_current_region(region_id, prev_rentry);
+				ran++;
+			}
 		}
 	}
 

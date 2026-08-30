@@ -123,17 +123,6 @@ xy_zero_ret(void *retp, const xy_adapter_t *reg)
 		memset(retp, 0, reg->ret_size);
 }
 
-void
-xy_set_last_ret(const void *retp, size_t ret_size)
-{
-	if (retp && ret_size > 0) {
-		memcpy(xy_last_retbuf, retp, ret_size);
-		xy_last_retp = xy_last_retbuf;
-	} else {
-		xy_last_retp = NULL;
-	}
-}
-
 int
 module_ensure_hook_impl_words(xy_mod_entry_t *me, int hook_id)
 {
@@ -161,17 +150,6 @@ module_mark_hook_implemented(xy_mod_entry_t *me, int hook_id)
 	if (module_ensure_hook_impl_words(me, hook_id) < 0)
 		return;
 	me->hook_impl_bits[hook_id / 64] |= (uint64_t)1 << (hook_id % 64);
-}
-
-int
-module_has_hook_implemented(const xy_mod_entry_t *me, int hook_id)
-{
-	if (!me || hook_id < 0)
-		return 0;
-	int word = hook_id / 64;
-	if (word >= me->hook_impl_words)
-		return 0;
-	return (me->hook_impl_bits[word] & ((uint64_t)1 << (hook_id % 64))) != 0;
 }
 
 int
